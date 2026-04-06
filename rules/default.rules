@@ -1,0 +1,93 @@
+# Coarse, native execpolicy rules for commands that should never or rarely
+# run outside the sandbox. The hook layer handles finer-grained matches.
+
+prefix_rule(
+    pattern = ["sudo"],
+    decision = "forbidden",
+    justification = "Privileged commands are manual-only. Run them yourself outside Codex if needed.",
+    match = ["sudo apt update"],
+)
+
+prefix_rule(
+    pattern = ["mkfs"],
+    decision = "forbidden",
+    justification = "Disk formatting commands are blocked for Codex.",
+    match = ["mkfs /dev/sda"],
+)
+
+prefix_rule(
+    pattern = ["shred"],
+    decision = "forbidden",
+    justification = "Data-destruction commands are blocked for Codex.",
+    match = ["shred file.txt"],
+)
+
+prefix_rule(
+    pattern = ["wipefs"],
+    decision = "forbidden",
+    justification = "Filesystem wipe commands are blocked for Codex.",
+    match = ["wipefs /dev/sda"],
+)
+
+prefix_rule(
+    pattern = ["git", "reset", "--hard"],
+    decision = "forbidden",
+    justification = "Destructive Git history rewrites are manual-only.",
+    match = ["git reset --hard HEAD~1"],
+)
+
+prefix_rule(
+    pattern = ["git", "checkout", "--"],
+    decision = "forbidden",
+    justification = "Discarding tracked changes is manual-only.",
+    match = ["git checkout -- ."],
+)
+
+prefix_rule(
+    pattern = ["git", "clean"],
+    decision = "forbidden",
+    justification = "Removing untracked files is manual-only.",
+    match = ["git clean -fdx"],
+)
+
+prefix_rule(
+    pattern = ["git", "push"],
+    decision = "prompt",
+    justification = "Require approval before pushing changes outside the sandbox.",
+    match = ["git push origin main"],
+)
+
+prefix_rule(
+    pattern = ["chmod", "777"],
+    decision = "forbidden",
+    justification = "Dangerous permission changes are blocked for Codex.",
+    match = ["chmod 777 /tmp/example"],
+)
+
+prefix_rule(
+    pattern = ["killall"],
+    decision = "prompt",
+    justification = "Killing multiple processes requires explicit approval.",
+    match = ["killall node"],
+)
+
+prefix_rule(
+    pattern = ["reboot"],
+    decision = "forbidden",
+    justification = "System control commands are manual-only.",
+    match = ["reboot"],
+)
+
+prefix_rule(
+    pattern = ["shutdown"],
+    decision = "forbidden",
+    justification = "System control commands are manual-only.",
+    match = ["shutdown now"],
+)
+
+prefix_rule(
+    pattern = ["systemctl", "stop"],
+    decision = "forbidden",
+    justification = "Stopping services is manual-only.",
+    match = ["systemctl stop nginx"],
+)

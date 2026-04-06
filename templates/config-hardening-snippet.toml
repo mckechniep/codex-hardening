@@ -1,0 +1,20 @@
+# Merge these settings into ~/.codex/config.toml.
+# Do not replace the entire file if you already have trusted projects,
+# plugin settings, or model preferences.
+
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+web_search = "cached"
+
+[history]
+persistence = "none"
+
+[sandbox_workspace_write]
+network_access = false
+
+[features]
+codex_hooks = true
+
+[shell_environment_policy]
+inherit = "core"
+include_only = ["HOME", "PATH", "LANG", "TERM", "USER", "SHELL", "TMPDIR"]

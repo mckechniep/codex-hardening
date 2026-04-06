@@ -1,0 +1,16 @@
+{
+  "allowed_domains": [
+    "localhost",
+    "127.0.0.1",
+    "::1",
+    "api.github.com",
+    "developers.openai.com",
+    "files.pythonhosted.org",
+    "github.com",
+    "index.crates.io",
+    "openai.com",
+    "pypi.org",
+    "raw.githubusercontent.com",
+    "registry.npmjs.org"
+  ]
+}
