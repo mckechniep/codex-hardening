@@ -11,6 +11,27 @@ This repo packages a practical baseline for developers who want:
 - a network egress allowlist hook
 - a reduced shell environment for subprocesses
 
+## Orientation
+
+This is a Codex-oriented hardening repo.
+
+It is designed for Codex CLI configuration under `~/.codex/`, with Codex-native concepts such as:
+
+- `config.toml`
+- `rules/*.rules`
+- `hooks.json`
+- `PreToolUse` Bash hooks
+- `workspace-write` sandboxing
+- `approval_policy`
+
+It is not a Claude config repo and does not target `~/.claude/`.
+
+## Attribution
+
+Credit to [AgentShield](https://github.com/affaan-m/agentshield), an AI agent security scanner focused on Claude-oriented setups.
+
+AgentShield helped shape the audit mindset behind this repo: scan the agent surface, separate real runtime risk from noise, and then harden the active configuration with a small set of concrete controls. This repo applies that mindset to Codex specifically, using Codex-native config layers and hook points rather than Claude-specific ones.
+
 ## What This Repo Contains
 
 - `templates/config-hardening-snippet.toml`
@@ -27,6 +48,8 @@ This repo packages a practical baseline for developers who want:
   Editable list of approved domains
 - `scripts/install.sh`
   Copies the shareable assets into `~/.codex`
+- `SECURITY-RATIONALE.md`
+  Why these controls exist, what they are intended to reduce, and what they do not cover
 
 ## Important Scope
 
@@ -110,6 +133,10 @@ python3 ~/.codex/hooks/block_network_egress.py <<'EOF'
 {"tool_input":{"command":"curl https://evil.example"}}
 EOF
 ```
+
+## Security Rationale
+
+The design rationale for these controls is documented in [SECURITY-RATIONALE.md](./SECURITY-RATIONALE.md).
 
 ## Limitations
 
