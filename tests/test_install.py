@@ -52,6 +52,7 @@ class InstallScriptTests(unittest.TestCase):
             self.assertTrue((codex_dir / "hooks" / "block_network_egress.py").exists())
             self.assertTrue((codex_dir / "rules" / "default.rules").exists())
             self.assertTrue((codex_dir / "scripts" / "codex-net").exists())
+            self.assertTrue((codex_dir / "scripts" / "codex_net_netns.py").exists())
             self.assertFalse((codex_dir / "policies" / "network_allowlist.json").exists())
             self.assertEqual((codex_dir / "config.toml").read_text(), 'model = "test-model"\n')
             self.assertEqual(

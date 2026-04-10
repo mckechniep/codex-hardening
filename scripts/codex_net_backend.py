@@ -9,7 +9,13 @@ import sys
 from pathlib import Path
 
 from codex_net_policy import PolicyError, load_network_profiles, validate_command_for_profile
-from codex_net_netns import netns_doctor_report, run_netns_spike
+from codex_net_netns import (
+    apply_netns_base,
+    netns_backend_status_report,
+    netns_doctor_report,
+    remove_netns_base,
+    run_netns_spike,
+)
 from codex_net_wsl import (
     BackendError,
     apply_nft_rules,
@@ -189,6 +195,25 @@ def cmd_compile_profiles(output_dir: str | None, print_nft: bool) -> int:
 
 def cmd_apply_rules(output_dir: str | None, use_sudo: bool, print_only: bool) -> int:
     config = load_config()
+    if config["backend"] == "linux_wsl_netns":
+        details = apply_netns_base(config, use_sudo=use_sudo)
+        write_backend_state(
+            {
+                "json_path": None,
+                "nft_path": None,
+                "nft_sha256": None,
+                "manifest": {"backend": "linux_wsl_netns"},
+            },
+            applied=True,
+            extra=details,
+        )
+        print(f"backend_state: {state_path()}")
+        print(f"table_name: {details['table_name']}")
+        print(f"base_nft_path: {details['base_nft_path']}")
+        print(f"base_nft_sha256: {details['base_nft_sha256']}")
+        print(f"removed_existing_table: {details['removed_existing_table']}")
+        return 0
+
     compiled = compile_profiles(config, Path(output_dir) if output_dir else None)
     print(f"nft_path: {compiled['nft_path']}")
     print(f"nft_sha256: {compiled['nft_sha256']}")
@@ -206,6 +231,14 @@ def cmd_apply_rules(output_dir: str | None, use_sudo: bool, print_only: bool) ->
 
 def cmd_remove_rules(use_sudo: bool) -> int:
     config = load_config()
+    if config["backend"] == "linux_wsl_netns":
+        details = remove_netns_base(config, use_sudo=use_sudo)
+        write_backend_state(None, applied=False, extra=details)
+        print(f"backend_state: {state_path()}")
+        print(f"table_name: {details['table_name']}")
+        print(f"removed: {details['removed']}")
+        return 0
+
     details = remove_nft_rules(config, use_sudo)
     write_backend_state(None, applied=False, extra=details)
     print(f"backend_state: {state_path()}")
@@ -216,7 +249,10 @@ def cmd_remove_rules(use_sudo: bool) -> int:
 
 def cmd_backend_status(as_json: bool) -> int:
     config = load_network_profiles()
-    report = backend_status_report(config)
+    if config and config["backend"] == "linux_wsl_netns":
+        report = netns_backend_status_report(config)
+    else:
+        report = backend_status_report(config)
     if as_json:
         print(json.dumps(report, indent=2))
         return 0
@@ -228,6 +264,11 @@ def cmd_backend_status(as_json: bool) -> int:
         state = report["state"]
         for key in ("updated_at", "applied", "backend", "json_path", "nft_path", "nft_sha256"):
             print(f"{key}: {state.get(key)}")
+        for key in ("base_nft_path", "base_nft_sha256"):
+            if key in state:
+                print(f"{key}: {state.get(key)}")
+    if "active_exec_count" in report:
+        print(f"active_exec_count: {report['active_exec_count']}")
     for issue in report["issues"]:
         print(f"issue: {issue}")
     return 0

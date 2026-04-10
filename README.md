@@ -210,6 +210,7 @@ Today, the workflow is:
 - `codex-net exec` launches wrapped commands through a profile scope inside a persistent per-profile slice
 - `codex-net doctor --json` now reports readiness for both `linux_wsl_nft` and the planned `linux_wsl_netns` backend
 - `codex-net netns-spike --sudo -- <command>` performs the experimental Phase 5A namespace create/run/cleanup check on stock WSL
+- when `backend = "linux_wsl_netns"`, `codex-net apply-rules --sudo` now installs base runtime nftables scaffolding plus local backend state, and `codex-net backend-status` reports whether that base runtime still matches disk state and whether any execution records are active
 
 If `codex-net doctor` reports `nft_socket_expr: ok`, you can try real WSL enforcement by setting `backend = "linux_wsl_nft"` in `network_profiles.toml`, then run:
 
@@ -248,6 +249,22 @@ Expected shape:
 - `backend_readiness.linux_wsl_nft` may still be `false` on stock WSL
 - `backend_readiness.linux_wsl_netns` should be `true` on a stock-WSL-capable host
 - the spike command should create a temporary namespace, run as your normal user, print a default route inside that namespace, and then clean itself up
+
+Phase 5B validation flow:
+
+```bash
+cp policies/network_profiles.toml .tmp/netns-policy.toml
+$EDITOR .tmp/netns-policy.toml   # set backend = "linux_wsl_netns"
+CODEX_NET_POLICY_PATH="$PWD/.tmp/netns-policy.toml" ./scripts/codex-net apply-rules --sudo
+CODEX_NET_POLICY_PATH="$PWD/.tmp/netns-policy.toml" ./scripts/codex-net backend-status --json
+CODEX_NET_POLICY_PATH="$PWD/.tmp/netns-policy.toml" ./scripts/codex-net remove-rules --sudo
+```
+
+Expected shape:
+
+- `apply-rules` reports `table_name`, `base_nft_path`, and `base_nft_sha256`
+- `backend-status` reports `ready: true` and `active_exec_count: 0`
+- `remove-rules` removes the base runtime table cleanly as long as no execution records exist
 
 ## Limitations
 

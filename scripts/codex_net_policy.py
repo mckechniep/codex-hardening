@@ -211,6 +211,8 @@ def load_network_profiles(path: Path | None = None) -> dict | None:
             or "cnh",
             "guest_veth_prefix": str(data.get("backend_linux_wsl_netns", {}).get("guest_veth_prefix", "cng")).strip()
             or "cng",
+            "nft_table_name": str(data.get("backend_linux_wsl_netns", {}).get("nft_table_name", "codex_netns_runtime")).strip()
+            or "codex_netns_runtime",
         },
         "profiles": profiles,
         "path": path,

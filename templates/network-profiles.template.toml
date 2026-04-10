@@ -18,6 +18,7 @@ use_systemd_user = true
 namespace_prefix = "codex-net"
 host_veth_prefix = "cnh"
 guest_veth_prefix = "cng"
+nft_table_name = "codex_netns_runtime"
 
 [profiles.offline]
 description = "No remote network access."

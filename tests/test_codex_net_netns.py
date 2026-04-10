@@ -1,5 +1,6 @@
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -9,7 +10,28 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import codex_net_netns
-from codex_net_netns import BackendError, namespace_launch_command, netns_doctor_report, run_netns_spike
+from codex_net_netns import (
+    BackendError,
+    apply_netns_base,
+    namespace_launch_command,
+    netns_backend_status_report,
+    netns_base_rules_path,
+    netns_doctor_report,
+    run_netns_spike,
+)
+from codex_net_wsl import write_backend_state
+
+
+def sample_config() -> dict:
+    return {
+        "backend": "linux_wsl_netns",
+        "backend_linux_wsl_netns": {
+            "namespace_prefix": "codex-net",
+            "host_veth_prefix": "cnh",
+            "guest_veth_prefix": "cng",
+            "nft_table_name": "codex_netns_runtime",
+        },
+    }
 
 
 class NetnsDoctorReportTests(unittest.TestCase):
@@ -84,6 +106,18 @@ class NamespaceLaunchCommandTests(unittest.TestCase):
 
 
 class NetnsSpikeLifecycleTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tempdir.cleanup)
+        self.original_state_path = codex_net_netns.os.environ.get("CODEX_NET_STATE_PATH")
+        codex_net_netns.os.environ["CODEX_NET_STATE_PATH"] = str(Path(self.tempdir.name) / "backend_state.json")
+
+    def tearDown(self) -> None:
+        if self.original_state_path is None:
+            codex_net_netns.os.environ.pop("CODEX_NET_STATE_PATH", None)
+        else:
+            codex_net_netns.os.environ["CODEX_NET_STATE_PATH"] = self.original_state_path
+
     @mock.patch.object(codex_net_netns, "netns_doctor_report", return_value={"ready": False, "checks": [{"name": "ip", "required": "true", "ok": "false"}]})
     def test_run_netns_spike_fails_when_host_is_not_ready(self, mock_doctor: mock.Mock) -> None:
         with self.assertRaisesRegex(BackendError, "Missing prerequisites"):
@@ -139,6 +173,83 @@ class NetnsSpikeLifecycleTests(unittest.TestCase):
         self.assertEqual(launch_call[:5], ["sudo", "ip", "netns", "exec", "codex-net-abcd1234"])
         cleanup_call = mock_subprocess.run.call_args_list[10].args[0]
         self.assertEqual(cleanup_call[:5], ["sudo", "ip", "link", "del", "cnhabcd1234"])
+
+
+class NetnsBackendStateTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tempdir.cleanup)
+        self.original_state_path = codex_net_netns.os.environ.get("CODEX_NET_STATE_PATH")
+        codex_net_netns.os.environ["CODEX_NET_STATE_PATH"] = str(Path(self.tempdir.name) / "backend_state.json")
+
+    def tearDown(self) -> None:
+        if self.original_state_path is None:
+            codex_net_netns.os.environ.pop("CODEX_NET_STATE_PATH", None)
+        else:
+            codex_net_netns.os.environ["CODEX_NET_STATE_PATH"] = self.original_state_path
+
+    @mock.patch.object(codex_net_netns, "subprocess")
+    @mock.patch.object(codex_net_netns, "netns_doctor_report", return_value={"ready": True, "checks": []})
+    def test_apply_netns_base_writes_rules_and_returns_details(
+        self,
+        mock_doctor: mock.Mock,
+        mock_subprocess: mock.Mock,
+    ) -> None:
+        success = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+        missing = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="No such file or directory")
+        mock_subprocess.run.side_effect = [success, missing, success]
+
+        details = apply_netns_base(sample_config(), use_sudo=True)
+
+        self.assertEqual(details["table_name"], "codex_netns_runtime")
+        self.assertTrue(Path(details["base_nft_path"]).exists())
+        rendered = netns_base_rules_path().read_text()
+        self.assertIn("table inet codex_netns_runtime", rendered)
+        self.assertIn("chain codex_netns_postrouting", rendered)
+
+    def test_netns_backend_status_report_accepts_matching_state(self) -> None:
+        base_path = netns_base_rules_path()
+        base_path.parent.mkdir(parents=True, exist_ok=True)
+        base_path.write_text("table inet codex_netns_runtime {}\n")
+        write_backend_state(
+            {
+                "json_path": None,
+                "nft_path": None,
+                "nft_sha256": None,
+                "manifest": {"backend": "linux_wsl_netns"},
+            },
+            applied=True,
+            extra={
+                "base_nft_path": str(base_path),
+                "base_nft_sha256": codex_net_netns.sha256(base_path.read_bytes()).hexdigest(),
+                "table_name": "codex_netns_runtime",
+            },
+        )
+
+        report = netns_backend_status_report(sample_config())
+        self.assertTrue(report["ready"])
+        self.assertEqual(report["active_exec_count"], 0)
+
+    def test_netns_backend_status_report_flags_missing_base_rules(self) -> None:
+        missing_path = netns_base_rules_path()
+        write_backend_state(
+            {
+                "json_path": None,
+                "nft_path": None,
+                "nft_sha256": None,
+                "manifest": {"backend": "linux_wsl_netns"},
+            },
+            applied=True,
+            extra={
+                "base_nft_path": str(missing_path),
+                "base_nft_sha256": "deadbeef",
+                "table_name": "codex_netns_runtime",
+            },
+        )
+
+        report = netns_backend_status_report(sample_config())
+        self.assertFalse(report["ready"])
+        self.assertTrue(any("base nftables file is missing" in issue for issue in report["issues"]))
 
 
 if __name__ == "__main__":

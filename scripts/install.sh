@@ -42,6 +42,7 @@ install -m 0644 "${repo_dir}/rules/default.rules" "${codex_dir}/rules/default.ru
 install -m 0644 "${repo_dir}/hooks/block_destructive.py" "${codex_dir}/hooks/block_destructive.py"
 install -m 0644 "${repo_dir}/hooks/block_network_egress.py" "${codex_dir}/hooks/block_network_egress.py"
 install -m 0644 "${repo_dir}/scripts/codex_net_policy.py" "${codex_dir}/scripts/codex_net_policy.py"
+install -m 0644 "${repo_dir}/scripts/codex_net_netns.py" "${codex_dir}/scripts/codex_net_netns.py"
 install -m 0644 "${repo_dir}/scripts/codex_net_wsl.py" "${codex_dir}/scripts/codex_net_wsl.py"
 install -m 0755 "${repo_dir}/scripts/codex_net_backend.py" "${codex_dir}/scripts/codex_net_backend.py"
 install -m 0755 "${repo_dir}/scripts/codex-net" "${codex_dir}/scripts/codex-net"
