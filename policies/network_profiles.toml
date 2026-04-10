@@ -1,7 +1,8 @@
 # First-pass network profile config.
 # The wrapper and hook use this file today.
 # Set `backend = "linux_wsl_nft"` only on WSL kernels that pass `codex-net doctor`.
-# The planned stock-WSL replacement backend is `linux_wsl_netns`, but it is not ready for normal execution yet.
+# The stock-WSL replacement backend is `linux_wsl_netns`. It now supports first-pass normal execution,
+# but `hook_only` remains the default shipped policy until that path gets broader host validation.
 
 backend = "hook_only"
 default_profile = "offline"

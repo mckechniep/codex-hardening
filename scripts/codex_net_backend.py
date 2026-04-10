@@ -14,6 +14,7 @@ from codex_net_netns import (
     netns_backend_status_report,
     netns_doctor_report,
     remove_netns_base,
+    run_netns_exec,
     run_netns_spike,
 )
 from codex_net_wsl import (
@@ -114,10 +115,7 @@ def cmd_exec(args: argparse.Namespace) -> int:
             raise PolicyError("systemd-run is required for the linux_wsl_nft backend.") from exc
 
     if backend == "linux_wsl_netns":
-        raise PolicyError(
-            "The linux_wsl_netns backend is not ready for normal wrapped execution yet. "
-            "Use `codex-net netns-spike -- <command>` to validate namespace setup on this host first."
-        )
+        return run_netns_exec(profile, wrapped_command, config)
 
     os.execvp(wrapped_command[0], wrapped_command)
     return 0

@@ -195,7 +195,7 @@ Supported default today:
 - `linux_wsl_nft` is kernel-dependent and should be treated as conditional, not baseline
 - if you are on the stock Microsoft WSL kernel, expect to stay on `hook_only` unless you intentionally move to a kernel that enables the required nft socket support
 - a WSL 2 setup that boots a custom kernel through `.wslconfig` can still be a valid `linux_wsl_nft` target if that kernel enables the required nft socket support and passes `codex-net doctor`
-- the new `linux_wsl_netns` direction is aimed at stock WSL, but today it is still in Phase 5A feasibility-spike form rather than production enforcement
+- `linux_wsl_netns` now has a first-pass real execution path for stock WSL, but it is still an advanced path rather than the default install recommendation
 
 Today, the workflow is:
 
@@ -210,7 +210,7 @@ Today, the workflow is:
 - `codex-net exec` launches wrapped commands through a profile scope inside a persistent per-profile slice
 - `codex-net doctor --json` now reports readiness for both `linux_wsl_nft` and the planned `linux_wsl_netns` backend
 - `codex-net netns-spike --sudo -- <command>` performs the experimental Phase 5A namespace create/run/cleanup check on stock WSL
-- when `backend = "linux_wsl_netns"`, `codex-net apply-rules --sudo` now installs base runtime nftables scaffolding plus local backend state, and `codex-net backend-status` reports whether that base runtime still matches disk state and whether any execution records are active
+- when `backend = "linux_wsl_netns"`, `codex-net apply-rules --sudo` installs base runtime nftables scaffolding plus local backend state, `codex-net backend-status` reports whether that base runtime still matches disk state and whether any execution records are active, and `codex-net exec --profile ... -- ...` now creates a per-execution namespace, installs a namespace-local `hosts` file plus fail-closed `resolv.conf`, applies a per-execution nftables table, and then runs the wrapped command as the original user
 
 If `codex-net doctor` reports `nft_socket_expr: ok`, you can try real WSL enforcement by setting `backend = "linux_wsl_nft"` in `network_profiles.toml`, then run:
 
@@ -227,8 +227,24 @@ When that backend is active, `codex-net exec --profile ... -- ...` refuses to ru
 - the configured systemd manager for the backend is not reachable for profile-bound scopes
 
 This is no longer just compile-only scaffolding. The `linux_wsl_nft` path now owns actual nftables apply/remove lifecycle and execution preflight when the host kernel supports it.
-The `hook_only` backend is the supported stock-WSL default today. It can validate commands whose actual remote targets are visible in the command text, such as `curl https://...` or `git clone https://...`. Commands like `git fetch origin`, package-manager installs against implicit registries, and custom binaries still need a manual decision until a stronger stock-WSL-compatible backend exists.
+The `hook_only` backend is the supported stock-WSL default today. It can validate commands whose actual remote targets are visible in the command text, such as `curl https://...` or `git clone https://...`. Commands like `git fetch origin`, package-manager installs against implicit registries, and custom binaries still need either the `linux_wsl_netns` backend or a manual decision.
 When `backend = "linux_wsl_nft"` is enabled, the execution path is: compile profiles, prepare per-profile slice units, apply the generated nftables rules, then launch wrapped commands through `systemd-run ... --scope --slice=<profile-slice>` via `codex-net exec`.
+
+When `backend = "linux_wsl_netns"` is enabled, the first-pass execution path is:
+
+- require applied base runtime state from `codex-net apply-rules --sudo`
+- resolve the selected profile's allowed domains to current IPv4 answers
+- build a namespace-local `hosts` file for those domains and a dead-end `resolv.conf`
+- create a per-execution namespace and veth pair
+- apply a per-execution nftables table keyed to that namespace interface and subnet
+- run the wrapped command as the original user inside the namespace
+- remove the per-execution table, namespace assets, and execution record on exit
+
+Current caveat for that backend:
+
+- explicit `localhost` targets are rejected, because namespace loopback is not host loopback yet
+- if you need a host-local service, wrap the command through a shell and use `$CODEX_NET_HOST_GATEWAY`, for example `codex-net exec --profile dev_local -- sh -lc 'curl http://$CODEX_NET_HOST_GATEWAY:3000'`
+- allowed hostnames currently resolve through the generated `hosts` file, so the backend fails closed if a profile domain cannot be resolved before launch
 
 Important kernel requirement:
 
@@ -266,10 +282,28 @@ Expected shape:
 - `backend-status` reports `ready: true` and `active_exec_count: 0`
 - `remove-rules` removes the base runtime table cleanly as long as no execution records exist
 
+Phase 5C validation flow:
+
+```bash
+cp policies/network_profiles.toml .tmp/netns-policy.toml
+$EDITOR .tmp/netns-policy.toml   # set backend = "linux_wsl_netns"
+CODEX_NET_POLICY_PATH="$PWD/.tmp/netns-policy.toml" ./scripts/codex-net apply-rules --sudo
+CODEX_NET_POLICY_PATH="$PWD/.tmp/netns-policy.toml" ./scripts/codex-net exec --profile registries -- curl https://github.com
+CODEX_NET_POLICY_PATH="$PWD/.tmp/netns-policy.toml" ./scripts/codex-net backend-status --json
+CODEX_NET_POLICY_PATH="$PWD/.tmp/netns-policy.toml" ./scripts/codex-net remove-rules --sudo
+```
+
+Expected shape:
+
+- `exec` runs through a transient namespace and exits with the wrapped command's exit code
+- `backend-status` returns `active_exec_count: 0` after the command exits cleanly
+- commands that target `localhost` fail fast with guidance to use `$CODEX_NET_HOST_GATEWAY`
+
 ## Limitations
 
 - Command-string inspection is not a full shell parser.
 - Aliases, nested shell tricks, and indirect execution can evade simple matching.
+- the first-pass `linux_wsl_netns` backend currently uses generated `hosts` files instead of a local policy DNS stub
 - The network hook only sees literal command text.
 - Dynamic destinations like `$URL` are blocked because they cannot be verified safely.
 - This protects Codex-driven shell actions, not commands a human runs directly.

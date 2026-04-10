@@ -13,10 +13,13 @@ import codex_net_netns
 from codex_net_netns import (
     BackendError,
     apply_netns_base,
+    exec_table_name,
     namespace_launch_command,
     netns_backend_status_report,
     netns_base_rules_path,
     netns_doctor_report,
+    render_exec_rules,
+    run_netns_exec,
     run_netns_spike,
 )
 from codex_net_wsl import write_backend_state
@@ -30,6 +33,32 @@ def sample_config() -> dict:
             "host_veth_prefix": "cnh",
             "guest_veth_prefix": "cng",
             "nft_table_name": "codex_netns_runtime",
+        },
+        "profiles": {
+            "offline": {
+                "description": "No remote network access.",
+                "allow_localhost": True,
+                "allowed_domains": [],
+                "allowed_tcp_ports": [],
+                "allowed_udp_ports": [],
+                "require_approval": False,
+            },
+            "registries": {
+                "description": "Common package registries and source hosts.",
+                "allow_localhost": True,
+                "allowed_domains": ["github.com"],
+                "allowed_tcp_ports": [443],
+                "allowed_udp_ports": [],
+                "require_approval": True,
+            },
+            "dev_local": {
+                "description": "Loopback and common local development ports.",
+                "allow_localhost": True,
+                "allowed_domains": ["localhost", "127.0.0.1"],
+                "allowed_tcp_ports": [3000, 8080],
+                "allowed_udp_ports": [],
+                "require_approval": False,
+            },
         },
     }
 
@@ -103,6 +132,17 @@ class NamespaceLaunchCommandTests(unittest.TestCase):
                 "--",
             ],
         )
+
+    def test_namespace_launch_command_appends_explicit_environment(self) -> None:
+        command = namespace_launch_command(
+            "codex-net-abcd1234",
+            1000,
+            1000,
+            ["python3", "-V"],
+            extra_env={"CODEX_NET_PROFILE": "registries"},
+        )
+        self.assertIn("env", command)
+        self.assertIn("CODEX_NET_PROFILE=registries", command)
 
 
 class NetnsSpikeLifecycleTests(unittest.TestCase):
@@ -250,6 +290,113 @@ class NetnsBackendStateTests(unittest.TestCase):
         report = netns_backend_status_report(sample_config())
         self.assertFalse(report["ready"])
         self.assertTrue(any("base nftables file is missing" in issue for issue in report["issues"]))
+
+
+class NetnsExecRulesTests(unittest.TestCase):
+    def test_render_exec_rules_contains_profile_specific_allowlist(self) -> None:
+        rendered = render_exec_rules(
+            sample_config(),
+            "abcd1234",
+            "cnhabcd1234",
+            {
+                "subnet": "169.254.10.0/30",
+                "host_ip": "169.254.10.1",
+                "guest_ip": "169.254.10.2",
+                "host_cidr": "169.254.10.1/30",
+                "guest_cidr": "169.254.10.2/30",
+            },
+            sample_config()["profiles"]["registries"],
+            {"github.com": ["140.82.112.3"]},
+        )
+
+        self.assertIn(f"table inet {exec_table_name(sample_config(), 'abcd1234')}", rendered)
+        self.assertIn('iifname "cnhabcd1234" ip daddr { 140.82.112.3 } tcp dport { 443 } accept', rendered)
+        self.assertIn('iifname "cnhabcd1234" reject with icmpx admin-prohibited', rendered)
+
+
+class NetnsExecLifecycleTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tempdir.cleanup)
+        self.original_state_path = codex_net_netns.os.environ.get("CODEX_NET_STATE_PATH")
+        codex_net_netns.os.environ["CODEX_NET_STATE_PATH"] = str(Path(self.tempdir.name) / "backend_state.json")
+
+    def tearDown(self) -> None:
+        if self.original_state_path is None:
+            codex_net_netns.os.environ.pop("CODEX_NET_STATE_PATH", None)
+        else:
+            codex_net_netns.os.environ["CODEX_NET_STATE_PATH"] = self.original_state_path
+
+    @mock.patch.object(codex_net_netns, "netns_backend_status_report", return_value={"ready": False, "issues": ["No backend state file has been recorded yet."]})
+    def test_run_netns_exec_requires_ready_backend_state(self, mock_status: mock.Mock) -> None:
+        with self.assertRaisesRegex(BackendError, "not ready"):
+            run_netns_exec("registries", ["curl", "https://github.com"], sample_config(), use_sudo=True)
+
+    @mock.patch.object(codex_net_netns, "netns_doctor_report", return_value={"ready": True, "checks": []})
+    @mock.patch.object(codex_net_netns, "netns_backend_status_report", return_value={"ready": True, "issues": []})
+    def test_run_netns_exec_rejects_localhost_targets(
+        self,
+        mock_status: mock.Mock,
+        mock_doctor: mock.Mock,
+    ) -> None:
+        with self.assertRaisesRegex(BackendError, "namespace-local"):
+            run_netns_exec("dev_local", ["curl", "http://localhost:3000"], sample_config(), use_sudo=True)
+
+    @mock.patch.object(codex_net_netns, "_resolve_domain_ipv4", return_value=["140.82.112.3"])
+    @mock.patch.object(codex_net_netns, "_namespace_token", return_value="abcd1234")
+    @mock.patch.object(codex_net_netns, "netns_doctor_report", return_value={"ready": True, "checks": []})
+    @mock.patch.object(codex_net_netns, "netns_backend_status_report", return_value={"ready": True, "issues": []})
+    @mock.patch.object(codex_net_netns, "subprocess")
+    @mock.patch.object(codex_net_netns, "os")
+    def test_run_netns_exec_applies_runtime_rules_and_cleans_up(
+        self,
+        mock_os: mock.Mock,
+        mock_subprocess: mock.Mock,
+        mock_status: mock.Mock,
+        mock_doctor: mock.Mock,
+        mock_token: mock.Mock,
+        mock_resolve: mock.Mock,
+    ) -> None:
+        mock_os.geteuid.return_value = 1000
+        mock_os.getuid.return_value = 1000
+        mock_os.getgid.return_value = 1000
+        mock_os.getcwd.return_value = str(ROOT)
+        mock_os.environ = {"PATH": "/usr/bin", "HOME": "/home/test"}
+
+        success = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+        command_result = subprocess.CompletedProcess(args=[], returncode=7, stdout="", stderr="")
+        mock_subprocess.run.side_effect = [
+            success,
+            success,
+            success,
+            success,
+            success,
+            success,
+            success,
+            success,
+            success,
+            success,
+            success,
+            success,
+            success,
+            success,
+            command_result,
+            success,
+            success,
+            success,
+            success,
+        ]
+
+        result = run_netns_exec("registries", ["curl", "https://github.com"], sample_config(), use_sudo=True)
+
+        self.assertEqual(result, 7)
+        launch_call = mock_subprocess.run.call_args_list[14].args[0]
+        self.assertEqual(launch_call[:5], ["sudo", "ip", "netns", "exec", "codex-net-abcd1234"])
+        self.assertIn("CODEX_NET_HOST_GATEWAY=169.254.172.65", launch_call)
+        nft_apply_call = mock_subprocess.run.call_args_list[13].args[0]
+        self.assertEqual(nft_apply_call[:3], ["sudo", "nft", "-f"])
+        nft_cleanup_call = mock_subprocess.run.call_args_list[15].args[0]
+        self.assertEqual(nft_cleanup_call[:6], ["sudo", "nft", "delete", "table", "inet", exec_table_name(sample_config(), "abcd1234")])
 
 
 if __name__ == "__main__":
