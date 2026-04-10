@@ -8,6 +8,12 @@ The current baseline hardening is useful, but the hook layer is still command-te
 
 The WSL-first backend fixes that by moving real blocking into the Linux networking layer while keeping Codex customization in user-editable policy files.
 
+Current validation note:
+
+- the first implementation depends on nft's `socket cgroupv2` expression
+- that requires kernel `CONFIG_NFT_SOCKET`
+- a real validation run on `6.6.87.2-microsoft-standard-WSL2` on April 9, 2026 found that `CONFIG_NFT_SOCKET` was not enabled, which makes this backend unavailable on that stock kernel even though `nft`, `sudo`, cgroup v2, and systemd are present
+
 ## Scope
 
 First implementation target:
@@ -98,7 +104,7 @@ The first backend is:
 
 It is responsible for:
 
-- preparing or refreshing destination allowlists
+- preparing or refreshing compiled profile destination sets
 - launching a command in the restricted execution context
 - applying `nftables` rules that bind egress to that context
 - surfacing backend capability checks and actionable errors

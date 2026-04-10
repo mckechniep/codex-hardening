@@ -8,7 +8,7 @@ This repo packages a practical baseline for developers who want:
 - approval-gated risky actions
 - a coarse deny/prompt rule layer
 - a destructive-command pre-execution hook
-- a network egress allowlist hook
+- a profile-based network egress hook
 - a reduced shell environment for subprocesses
 
 ## Orientation
@@ -43,9 +43,7 @@ AgentShield helped shape the audit mindset behind this repo: scan the agent surf
 - `hooks/block_destructive.py`
   Blocks obviously destructive commands and manual-only operations
 - `hooks/block_network_egress.py`
-  Blocks outbound shell network usage unless the target is on the allowlist
-- `policies/network_allowlist.json`
-  Editable list of approved domains
+  Blocks outbound shell network usage unless it matches a configured network profile
 - `policies/network_profiles.toml`
   Profile-based network policy used by `codex-net`
 - `scripts/install.sh`
@@ -127,6 +125,8 @@ codex execpolicy check --rules ~/.codex/rules/default.rules git push origin main
 Hook tests:
 
 ```bash
+python3 -m unittest -v
+
 python3 ~/.codex/hooks/block_destructive.py <<'EOF'
 {"tool_input":{"command":"git reset --hard HEAD~1"}}
 EOF
@@ -152,11 +152,50 @@ EOF
 
 The design rationale for these controls is documented in [SECURITY-RATIONALE.md](./SECURITY-RATIONALE.md).
 
+## Practical Value Today
+
+Blunt version:
+
+- this repo is useful today as a guardrail bundle
+- it is not yet true network containment on stock WSL
+
+What it is already good at:
+
+- blocking obviously destructive shell commands before Codex runs them
+- keeping Codex in `workspace-write` with network disabled by default
+- blocking direct, explicit shell network commands unless they go through `codex-net`
+- forcing network use into named profiles instead of silent ambient access
+- reducing inherited shell environment so tokens and local state are exposed less broadly
+
+What it is not yet good at on stock WSL:
+
+- reliably containing arbitrary network-capable binaries below the shell-command layer
+- proving that implicit commands like `git fetch origin` or `npm install` can only reach approved destinations without a human decision
+- delivering strong Linux-side packet enforcement on the default Microsoft WSL kernel
+
+If you want a stronger stock-WSL-compatible backend, see [docs/stock-wsl-backend-options.md](./docs/stock-wsl-backend-options.md).
+
+## Roadmap
+
+The next hardening steps are tracked in [docs/hardening-roadmap.md](./docs/hardening-roadmap.md).
+The stock-WSL backend replacement options are compared in [docs/stock-wsl-backend-options.md](./docs/stock-wsl-backend-options.md).
+The concrete namespace-backend implementation plan lives in [docs/namespace-backend-plan.md](./docs/namespace-backend-plan.md).
+
 ## WSL Backend
 
-This repo now includes a WSL-first network-enforcement backend that keeps Codex offline by default but allows wrapped, profile-based network access with real Linux-side egress controls.
+This repo now uses profile-based network policy only. The legacy JSON allowlist fallback has been removed.
+
+This repo includes a WSL-first network-enforcement backend that keeps Codex offline by default but allows wrapped, profile-based network access with real Linux-side egress controls.
 
 See [docs/wsl-first-architecture.md](./docs/wsl-first-architecture.md) for the architecture and [templates/network-profiles.template.toml](./templates/network-profiles.template.toml) for the planned policy shape.
+
+Supported default today:
+
+- `hook_only` is the supported backend on stock WSL and remains the default shipped policy
+- `linux_wsl_nft` is kernel-dependent and should be treated as conditional, not baseline
+- if you are on the stock Microsoft WSL kernel, expect to stay on `hook_only` unless you intentionally move to a kernel that enables the required nft socket support
+- a WSL 2 setup that boots a custom kernel through `.wslconfig` can still be a valid `linux_wsl_nft` target if that kernel enables the required nft socket support and passes `codex-net doctor`
+- the new `linux_wsl_netns` direction is aimed at stock WSL, but today it is still in Phase 5A feasibility-spike form rather than production enforcement
 
 Today, the workflow is:
 
@@ -165,12 +204,14 @@ Today, the workflow is:
 - the wrapper validates the selected profile before launching the command
 - `codex-net doctor` checks whether the WSL nftables backend prerequisites are present
 - `codex-net compile-profiles` resolves domains and renders nftables-friendly set files for the next backend step
-- `codex-net apply-rules --sudo` validates, replaces, and applies the generated nftables table for the configured backend
+- `codex-net apply-rules --sudo` prepares the profile slices, validates, replaces, and applies the generated nftables table for the configured backend
 - `codex-net backend-status` checks whether the recorded backend state still matches the compiled artifacts on disk
-- `codex-net remove-rules --sudo` removes the installed nftables table cleanly
-- if the WSL user systemd bus is unavailable, `codex-net exec` can fall back to `sudo systemd-run --scope ...` when `allow_system_scope_fallback = true`
+- `codex-net remove-rules --sudo` removes the installed nftables table and the prepared slice units cleanly
+- `codex-net exec` launches wrapped commands through a profile scope inside a persistent per-profile slice
+- `codex-net doctor --json` now reports readiness for both `linux_wsl_nft` and the planned `linux_wsl_netns` backend
+- `codex-net netns-spike --sudo -- <command>` performs the experimental Phase 5A namespace create/run/cleanup check on stock WSL
 
-To activate real WSL enforcement, set `backend = "linux_wsl_nft"` in `network_profiles.toml`, then run:
+If `codex-net doctor` reports `nft_socket_expr: ok`, you can try real WSL enforcement by setting `backend = "linux_wsl_nft"` in `network_profiles.toml`, then run:
 
 ```bash
 ~/.codex/scripts/codex-net doctor
@@ -182,11 +223,31 @@ When that backend is active, `codex-net exec --profile ... -- ...` refuses to ru
 
 - no applied backend state is recorded
 - the compiled nftables file on disk no longer matches the recorded state
-- neither the WSL user systemd manager nor the optional system-scope fallback is reachable for profile-bound scopes
+- the configured systemd manager for the backend is not reachable for profile-bound scopes
 
-This is no longer just compile-only scaffolding. The `linux_wsl_nft` path now owns actual nftables apply/remove lifecycle and execution preflight.
-The `hook_only` backend can only validate commands whose actual remote targets are visible in the command text, such as `curl https://...` or `git clone https://...`. Commands like `git fetch origin`, package-manager installs against implicit registries, and custom binaries still need a manual decision or the future Linux backend.
-When `backend = "linux_wsl_nft"` is enabled, the execution path is: compile profiles, apply the generated nftables rules, then launch wrapped commands through a profile-specific `systemd-run ... --scope` via `codex-net exec`.
+This is no longer just compile-only scaffolding. The `linux_wsl_nft` path now owns actual nftables apply/remove lifecycle and execution preflight when the host kernel supports it.
+The `hook_only` backend is the supported stock-WSL default today. It can validate commands whose actual remote targets are visible in the command text, such as `curl https://...` or `git clone https://...`. Commands like `git fetch origin`, package-manager installs against implicit registries, and custom binaries still need a manual decision until a stronger stock-WSL-compatible backend exists.
+When `backend = "linux_wsl_nft"` is enabled, the execution path is: compile profiles, prepare per-profile slice units, apply the generated nftables rules, then launch wrapped commands through `systemd-run ... --scope --slice=<profile-slice>` via `codex-net exec`.
+
+Important kernel requirement:
+
+- the `linux_wsl_nft` backend requires kernel support for the nft socket expression via `CONFIG_NFT_SOCKET`
+- on the Microsoft WSL kernel `6.6.87.2-microsoft-standard-WSL2` validated on April 9, 2026, `CONFIG_NFT_SOCKET` was not set
+- on kernels like that, `codex-net doctor` should report `nft_socket_expr: missing` and `codex-net apply-rules` will now fail immediately with an explicit capability error instead of a long nft validation dump
+- on those kernels, stay on `hook_only`; do not treat `linux_wsl_nft` as part of the default install path
+
+Phase 5A validation command:
+
+```bash
+~/.codex/scripts/codex-net doctor --json
+~/.codex/scripts/codex-net netns-spike --sudo -- sh -lc 'id -u; ip route'
+```
+
+Expected shape:
+
+- `backend_readiness.linux_wsl_nft` may still be `false` on stock WSL
+- `backend_readiness.linux_wsl_netns` should be `true` on a stock-WSL-capable host
+- the spike command should create a temporary namespace, run as your normal user, print a default route inside that namespace, and then clean itself up
 
 ## Limitations
 

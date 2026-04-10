@@ -23,7 +23,7 @@ The backend is no longer compile-only. `codex-net` now supports:
 
 - direct network commands are denied when profile config is present
 - wrapped commands go through `codex-net exec --profile ... -- ...`
-- `hook_only` still exists for machines that cannot use the WSL backend
+- `hook_only` is the supported default for stock WSL today
 
 ### WSL backend lifecycle
 
@@ -35,18 +35,16 @@ The backend is no longer compile-only. `codex-net` now supports:
 
 ### Scope-launch logic
 
-- preferred path is `systemd-run --user --scope`
-- new fallback path exists for WSL users without a working user bus:
-  `sudo systemd-run --scope`
-- the fallback is controlled by:
-  `backend_linux_wsl_nft.allow_system_scope_fallback = true`
+- preferred path is `systemd-run --user --scope --slice=<profile-slice>`
+- system-scope launch remains available only when the backend is explicitly configured for it
+- nftables rules now match persistent per-profile slices rather than transient scope names
 
 ## Current Limits
 
 These were not exercised end-to-end in this sandbox:
 
 - real `nft` application into the kernel
-- real `sudo systemd-run --scope ...` launch
+- real `systemd-run --scope --slice=...` launch
 - real packet filtering of a wrapped process
 
 This environment reported:
@@ -59,6 +57,16 @@ This environment reported:
 - system systemd bus: unreachable
 
 That means the missing piece is host validation on a real WSL box, not another major code pass.
+
+## Real Host Finding On April 9, 2026
+
+A real WSL2 validation run on `6.6.87.2-microsoft-standard-WSL2` showed:
+
+- profile leaf slices can be created and anchored successfully under the user systemd manager
+- the referenced cgroup paths do exist while those anchor services are running
+- nft rule application still cannot proceed on that kernel because `CONFIG_NFT_SOCKET` is not enabled
+
+That means the current `linux_wsl_nft` backend is structurally correct enough to validate its cgroup assumptions, but it is not deployable on stock kernels that omit `CONFIG_NFT_SOCKET`. The repo now needs to fail early on that capability check and treat alternative kernel support or an alternate backend as follow-on work.
 
 ## Files Added Or Extended
 
@@ -79,31 +87,18 @@ Also updated:
 
 ## Recommended Next Step
 
-Run the backend on a real WSL distro that has:
+Treat `hook_only` as the supported default on stock WSL.
 
-- `nftables` installed
-- `sudo`
-- systemd enabled if possible
+That means:
 
-Then validate this exact flow:
-
-1. Set `backend = "linux_wsl_nft"` in `~/.codex/policies/network_profiles.toml`.
-2. Run `~/.codex/scripts/codex-net doctor`.
-3. Run `~/.codex/scripts/codex-net apply-rules --sudo`.
-4. Run `~/.codex/scripts/codex-net backend-status`.
-5. Test a permitted wrapped command.
-6. Test a denied wrapped command.
-7. If user-scope fails, verify the system-scope fallback path.
+1. Leave `backend = "hook_only"` in `network_profiles.toml`.
+2. Keep improving the profile coverage, hook messaging, and operator UX around implicit network decisions.
+3. Treat `linux_wsl_nft` as conditional and only attempt it on kernels where `codex-net doctor` reports `nft_socket_expr: ok`.
 
 ## If Picking This Up Later
 
-If the real-machine validation works:
+If picking this up later:
 
-- keep this backend as the default WSL recommendation
-- improve `doctor` with distro-specific install hints for `nftables`
-- consider emitting a clearer message when fallback to system scope is used at runtime
-
-If the real-machine validation fails:
-
-- inspect whether the failure is nftables syntax, cgroup matching, or systemd scope binding
-- decide whether the fallback should move away from `systemd-run` entirely for some WSL setups
+- keep `hook_only` polished as the normal path
+- decide whether supporting a custom WSL kernel is acceptable for advanced users
+- design an alternate stock-WSL backend that does not depend on `CONFIG_NFT_SOCKET`

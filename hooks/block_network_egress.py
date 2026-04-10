@@ -11,18 +11,15 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from codex_net_policy import (
-    NETWORK_TOOLS,
+    NetworkRequest,
     PolicyError,
-    collect_network_requests,
+    inspect_network_intent,
     iter_literal_commands,
-    load_legacy_allowlist,
     load_network_profiles,
     parse_codex_net_exec,
-    select_profile_for_command,
     split_segments,
     strip_wrappers,
     tokenize,
-    validate_command_against_allowlist,
     validate_command_for_profile,
 )
 
@@ -49,6 +46,13 @@ def wrapped_command_text(profile: str, nested_tokens: list[str]) -> str:
     return f"{wrapper} exec --profile {profile} -- {nested}".strip()
 
 
+def first_request_issue(requests: list[NetworkRequest]) -> str | None:
+    for request in requests:
+        if request.issue:
+            return str(request.issue)
+    return None
+
+
 def profile_mode(command: str, config: dict) -> None:
     for candidate in iter_literal_commands(command):
         for segment in split_segments(tokenize(candidate)):
@@ -71,30 +75,26 @@ def profile_mode(command: str, config: dict) -> None:
                 continue
 
             segment_text = shlex.join(segment)
-            requests = collect_network_requests(segment_text)
-            suggested_profile = select_profile_for_command(config, segment_text)
-            if not suggested_profile and not requests:
+            intent = inspect_network_intent(config, segment_text)
+            if not intent:
                 continue
 
-            if suggested_profile and not requests and config["backend"] == "hook_only":
+            issue = first_request_issue(intent.requests)
+            if issue:
+                deny(issue)
+
+            if intent.kind == "implicit" and config["backend"] == "hook_only":
                 deny(
-                    f"This command maps to network profile `{suggested_profile}`, but the hook_only backend "
+                    f"This command implies network access and maps to profile `{intent.profile}`, but the hook_only backend "
                     "cannot verify its actual destination from the command text. Use a command with an explicit "
                     "remote target, keep it manual, or switch to linux_wsl_nft when that backend is ready."
                 )
 
-            suggested_profile = suggested_profile or "<profile>"
+            suggested_profile = intent.profile or "<profile>"
             deny(
                 "Direct network commands must use codex-net. "
                 f"Retry as `{wrapped_command_text(suggested_profile, segment)}`."
             )
-
-
-def allowlist_mode(command: str) -> None:
-    try:
-        validate_command_against_allowlist(command, load_legacy_allowlist())
-    except PolicyError as exc:
-        deny(str(exc))
 
 
 def main() -> None:
@@ -108,11 +108,13 @@ def main() -> None:
     except PolicyError as exc:
         deny(str(exc))
 
-    if config:
-        profile_mode(command, config)
-        return
+    if not config:
+        deny(
+            "No network profile config was found. Install or create ~/.codex/policies/network_profiles.toml first. "
+            "Profile-based network policy is required; the legacy network_allowlist.json path has been removed."
+        )
 
-    allowlist_mode(command)
+    profile_mode(command, config)
 
 
 if __name__ == "__main__":

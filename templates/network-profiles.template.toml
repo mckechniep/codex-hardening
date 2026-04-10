@@ -1,6 +1,7 @@
 # First-pass network profile config template.
 # The wrapper and hook use this file today.
-# Set `backend = "linux_wsl_nft"` to activate nftables-backed enforcement on WSL.
+# Set `backend = "linux_wsl_nft"` only on WSL kernels that pass `codex-net doctor`.
+# The planned stock-WSL replacement backend is `linux_wsl_netns`, but it is not ready for normal execution yet.
 
 backend = "hook_only"
 default_profile = "offline"
@@ -8,12 +9,15 @@ dns_mode = "system_resolver"
 temporary_grant_ttl = "30m"
 
 [backend_linux_wsl_nft]
-allow_system_scope_fallback = true
 scope_unit_prefix = "codex-net"
-cgroup_match_level = 5
 nft_table_name = "codex_hardening"
 chain_name = "codex_net_output"
 use_systemd_user = true
+
+[backend_linux_wsl_netns]
+namespace_prefix = "codex-net"
+host_veth_prefix = "cnh"
+guest_veth_prefix = "cng"
 
 [profiles.offline]
 description = "No remote network access."

@@ -19,7 +19,7 @@ The hardening model here is layered:
 2. Coarse native command controls in `rules/default.rules`
 3. Fine-grained shell inspection in `hooks/block_destructive.py`
 4. Fine-grained shell egress checks in `hooks/block_network_egress.py`
-5. Operator-maintained destinations in `policies/network_allowlist.json`
+5. Operator-maintained profiles in `policies/network_profiles.toml`
 
 Each layer covers a different failure mode.
 
@@ -121,7 +121,7 @@ The hook is intended to catch commands such as:
 
 The operational rule is simple: if the command is risky enough that human intent should be explicit, Codex should stop and the operator should run it manually if they truly want it.
 
-### 9. Network allowlist hook
+### 9. Profile-based network hook
 
 The network hook exists because shell egress is one of the most useful exploitation paths against coding agents.
 
@@ -136,24 +136,18 @@ The hook focuses on explicit shell networking tools:
 
 It allows:
 
-- localhost and loopback targets
-- literal destinations on the allowlist
+- localhost and loopback targets when the selected profile allows them
+- explicit remote targets that fit the selected profile
+- wrapped commands that use `codex-net exec --profile ... -- ...`
 
 It blocks:
 
-- unapproved remote destinations
+- remote destinations outside the selected profile
+- implicit network commands when the backend cannot verify the actual destination
 - ambiguous raw socket use
 - dynamic destinations such as `$URL` that cannot be safely verified from the literal command string
 
-## Why an Allowlist File Exists Separately
-
-`policies/network_allowlist.json` is intentionally separated from the hook logic.
-
-That separation makes the policy easier to maintain:
-
-- operators can add approved destinations without editing Python
-- teams can review destination changes independently from code changes
-- the hook remains small and predictable
+On stock WSL today, this hook-driven path is the supported network control model. That means implicit network commands may still require a human decision even when the profile model exists, because the stronger nft-backed backend depends on kernel support that is not present on the default Microsoft WSL kernel validated for this repo.
 
 ## What This Repo Does Not Claim
 
@@ -193,7 +187,7 @@ Use this repo as:
 
 Do not treat it as immutable. Teams should expect to tune:
 
-- the allowlist
+- the profiles
 - the destructive-command patterns
 - which operations are manual-only versus approval-gated
 

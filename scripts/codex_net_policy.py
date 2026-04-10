@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-import json
 import os
 import re
 import shlex
@@ -18,7 +17,6 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.11+ has tomllib
 
 
 DEFAULT_PROFILE_PATH = Path.home() / ".codex" / "policies" / "network_profiles.toml"
-DEFAULT_ALLOWLIST_PATH = Path.home() / ".codex" / "policies" / "network_allowlist.json"
 NETWORK_TOOLS = {"curl", "wget", "nc", "ncat", "netcat", "ssh", "scp", "rsync"}
 INSPECTED_NETWORK_EXECUTABLES = NETWORK_TOOLS | {"git"}
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
@@ -107,14 +105,16 @@ class NetworkRequest:
     issue: str | None = None
 
 
+@dataclass
+class NetworkIntent:
+    kind: str
+    profile: str | None
+    requests: list[NetworkRequest]
+
+
 def profile_path() -> Path:
     override = os.environ.get("CODEX_NET_POLICY_PATH")
     return Path(override) if override else DEFAULT_PROFILE_PATH
-
-
-def allowlist_path() -> Path:
-    override = os.environ.get("CODEX_NET_ALLOWLIST_PATH")
-    return Path(override) if override else DEFAULT_ALLOWLIST_PATH
 
 
 def _string_map(value: object) -> dict[str, str]:
@@ -196,40 +196,33 @@ def load_network_profiles(path: Path | None = None) -> dict | None:
         "command_profiles": command_profiles,
         "tool_profiles": tool_profiles,
         "backend_linux_wsl_nft": {
-            "allow_system_scope_fallback": bool(
-                data.get("backend_linux_wsl_nft", {}).get("allow_system_scope_fallback", True)
-            ),
             "chain_name": str(data.get("backend_linux_wsl_nft", {}).get("chain_name", "codex_net_output")).strip()
             or "codex_net_output",
-            "cgroup_match_level": int(data.get("backend_linux_wsl_nft", {}).get("cgroup_match_level", 5)),
             "nft_table_name": str(data.get("backend_linux_wsl_nft", {}).get("nft_table_name", "codex_hardening")).strip()
             or "codex_hardening",
             "scope_unit_prefix": str(data.get("backend_linux_wsl_nft", {}).get("scope_unit_prefix", "codex-net")).strip()
             or "codex-net",
             "use_systemd_user": bool(data.get("backend_linux_wsl_nft", {}).get("use_systemd_user", True)),
         },
+        "backend_linux_wsl_netns": {
+            "namespace_prefix": str(data.get("backend_linux_wsl_netns", {}).get("namespace_prefix", "codex-net")).strip()
+            or "codex-net",
+            "host_veth_prefix": str(data.get("backend_linux_wsl_netns", {}).get("host_veth_prefix", "cnh")).strip()
+            or "cnh",
+            "guest_veth_prefix": str(data.get("backend_linux_wsl_netns", {}).get("guest_veth_prefix", "cng")).strip()
+            or "cng",
+        },
         "profiles": profiles,
         "path": path,
     }
 
 
-def load_legacy_allowlist(path: Path | None = None) -> set[str]:
-    path = path or allowlist_path()
-    try:
-        data = json.loads(path.read_text())
-    except Exception:
-        return set(LOCAL_HOSTS)
-    domains = {
-        str(item).strip().lower()
-        for item in data.get("allowed_domains", [])
-        if str(item).strip()
-    }
-    return domains | LOCAL_HOSTS
-
-
 def tokenize(command: str) -> list[str]:
     try:
-        return shlex.split(command, posix=True)
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|")
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        return list(lexer)
     except Exception:
         return command.split()
 
@@ -598,7 +591,7 @@ def parse_codex_net_exec(args: list[str], default_profile: str) -> tuple[str, li
     return profile, nested
 
 
-def select_profile_for_command(config: dict, command: str) -> str | None:
+def mapped_profile_for_command(config: dict, command: str) -> str | None:
     for candidate in iter_literal_commands(command):
         tokens = tokenize(candidate)
         if not tokens:
@@ -621,8 +614,31 @@ def select_profile_for_command(config: dict, command: str) -> str | None:
             if profile in config["profiles"]:
                 return profile
 
-    if "custom" in config["profiles"]:
+    return None
+
+
+def select_profile_for_command(config: dict, command: str) -> str | None:
+    mapped = mapped_profile_for_command(config, command)
+    if mapped:
+        return mapped
+
+    # Only fall back to `custom` when the command already contains an
+    # explicit network target that the hook can inspect. Returning `custom`
+    # for every unmatched command causes ordinary shell commands like `ls`
+    # to be misclassified as networked.
+    if "custom" in config["profiles"] and collect_network_requests(command):
         return "custom"
+    return None
+
+
+def inspect_network_intent(config: dict, command: str) -> NetworkIntent | None:
+    requests = collect_network_requests(command)
+    profile = select_profile_for_command(config, command)
+
+    if requests:
+        return NetworkIntent(kind="explicit", profile=profile, requests=requests)
+    if profile:
+        return NetworkIntent(kind="implicit", profile=profile, requests=[])
     return None
 
 
@@ -672,20 +688,14 @@ def validate_command_for_profile(command: str, profile_name: str, config: dict) 
     if profile_name not in config["profiles"]:
         raise PolicyError(f"Unknown network profile `{profile_name}`.")
 
-    requests = collect_network_requests(command)
-    if config["backend"] == "hook_only" and not requests:
+    intent = inspect_network_intent(config, command)
+    requests = intent.requests if intent else []
+
+    if config["backend"] == "hook_only" and intent and intent.kind == "implicit":
         raise PolicyError(
             "The hook_only backend can only validate commands with explicit network targets in the command text. "
-            "This command needs the linux_wsl_nft backend or a manual operator decision."
+            "This command needs a manual operator decision today, or a stronger backend on a host that supports it."
         )
 
     for request in requests:
         _validate_request_against_profile(request, profile_name, config)
-
-
-def validate_command_against_allowlist(command: str, allowlist: set[str]) -> None:
-    for request in collect_network_requests(command):
-        if request.issue:
-            raise PolicyError(request.issue)
-        if not request.host or not host_is_allowed(request.host, allowlist):
-            raise PolicyError(f"`{request.tool}` destination `{request.target}` is not on the allowlist.")

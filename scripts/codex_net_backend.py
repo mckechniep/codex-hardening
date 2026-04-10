@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from codex_net_policy import PolicyError, load_network_profiles, validate_command_for_profile
+from codex_net_netns import netns_doctor_report, run_netns_spike
 from codex_net_wsl import (
     BackendError,
     apply_nft_rules,
@@ -55,6 +56,12 @@ def parser() -> argparse.ArgumentParser:
     remove_parser.add_argument("--sudo", action="store_true", help="Run nft via sudo.")
     status_parser = subcommands.add_parser("backend-status", help="Show the last recorded backend apply state.")
     status_parser.add_argument("--json", action="store_true", help="Print backend status as JSON.")
+    spike_parser = subcommands.add_parser(
+        "netns-spike",
+        help="Run the experimental namespace feasibility spike for the planned stock-WSL backend.",
+    )
+    spike_parser.add_argument("--sudo", action="store_true", help="Run namespace setup commands via sudo.")
+    spike_parser.add_argument("wrapped_command", nargs=argparse.REMAINDER, help="Command to run after `--`.")
     return program
 
 
@@ -80,7 +87,7 @@ def cmd_exec(args: argparse.Namespace) -> int:
     validate_command_for_profile(command_text, profile, config)
 
     backend = config["backend"]
-    if backend not in {"hook_only", "linux_wsl_nft"}:
+    if backend not in {"hook_only", "linux_wsl_nft", "linux_wsl_netns"}:
         raise PolicyError(f"Unsupported network backend `{backend}`.")
 
     if backend == "linux_wsl_nft":
@@ -99,6 +106,12 @@ def cmd_exec(args: argparse.Namespace) -> int:
             return subprocess.run(command).returncode
         except FileNotFoundError as exc:
             raise PolicyError("systemd-run is required for the linux_wsl_nft backend.") from exc
+
+    if backend == "linux_wsl_netns":
+        raise PolicyError(
+            "The linux_wsl_netns backend is not ready for normal wrapped execution yet. "
+            "Use `codex-net netns-spike -- <command>` to validate namespace setup on this host first."
+        )
 
     os.execvp(wrapped_command[0], wrapped_command)
     return 0
@@ -124,8 +137,17 @@ def cmd_show_config() -> int:
 
 def cmd_doctor(as_json: bool) -> int:
     report = doctor_report()
+    netns_report = netns_doctor_report()
     if as_json:
-        print(json.dumps(report, indent=2))
+        payload = {
+            **report,
+            "backend_readiness": {
+                "linux_wsl_nft": report["ready"],
+                "linux_wsl_netns": netns_report["ready"],
+            },
+            "netns_checks": netns_report["checks"],
+        }
+        print(json.dumps(payload, indent=2))
         return 0
 
     env = report["environment"]
@@ -133,11 +155,19 @@ def cmd_doctor(as_json: bool) -> int:
     print(f"osrelease: {env['osrelease'] or 'unknown'}")
     print(f"is_wsl2: {env['is_wsl2']}")
     print(f"ready: {'yes' if report['ready'] else 'no'}")
+    print(f"linux_wsl_nft_ready: {'yes' if report['ready'] else 'no'}")
+    print(f"linux_wsl_netns_ready: {'yes' if netns_report['ready'] else 'no'}")
     for check in report["checks"]:
         status = "ok" if check["ok"] == "true" else "missing"
         suffix = "required" if check["required"] == "true" else "recommended"
         print(f"{check['name']}: {status} ({suffix})")
         print(f"  {check['detail']}")
+    print("netns_checks:")
+    for check in netns_report["checks"]:
+        status = "ok" if check["ok"] == "true" else "missing"
+        suffix = "required" if check["required"] == "true" else "recommended"
+        print(f"  {check['name']}: {status} ({suffix})")
+        print(f"    {check['detail']}")
     return 0
 
 
@@ -203,6 +233,23 @@ def cmd_backend_status(as_json: bool) -> int:
     return 0
 
 
+def cmd_netns_spike(args: argparse.Namespace) -> int:
+    wrapped_command = list(args.wrapped_command)
+    if wrapped_command and wrapped_command[0] == "--":
+        wrapped_command = wrapped_command[1:]
+    details = run_netns_spike(wrapped_command, use_sudo=args.sudo)
+    print("backend: linux_wsl_netns")
+    print("mode: feasibility_spike")
+    print(f"namespace: {details['namespace']}")
+    print(f"host_veth: {details['host_veth']}")
+    print(f"guest_veth: {details['guest_veth']}")
+    print(f"subnet: {details['subnet']}")
+    print(f"host_ip: {details['host_ip']}")
+    print(f"guest_ip: {details['guest_ip']}")
+    print(f"returncode: {details['returncode']}")
+    return int(details["returncode"])
+
+
 def main() -> int:
     args = parser().parse_args()
     if args.command == "exec":
@@ -219,6 +266,8 @@ def main() -> int:
         return cmd_apply_rules(args.output_dir, args.sudo, args.print_only)
     if args.command == "remove-rules":
         return cmd_remove_rules(args.sudo)
+    if args.command == "netns-spike":
+        return cmd_netns_spike(args)
     return cmd_backend_status(args.json)
 
 

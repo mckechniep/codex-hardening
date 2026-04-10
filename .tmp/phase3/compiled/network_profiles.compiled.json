@@ -1,0 +1,244 @@
+{
+  "generated_at": "2026-04-10T03:28:13.563281+00:00",
+  "backend": "linux_wsl_nft",
+  "backend_linux_wsl_nft": {
+    "chain_name": "codex_net_output",
+    "nft_table_name": "codex_hardening",
+    "scope_unit_prefix": "codex-net",
+    "use_systemd_user": true
+  },
+  "default_profile": "offline",
+  "resolvers": {
+    "ipv4": [
+      "10.255.255.254"
+    ],
+    "ipv6": []
+  },
+  "source_path": "/home/mckechniep/ai-llms/settings-instructions/codex/codex-hardening/.tmp/phase3/network_profiles.toml",
+  "profiles": {
+    "custom": {
+      "description": "User-managed profile entries.",
+      "allow_localhost": true,
+      "allowed_domains": [],
+      "allowed_tcp_ports": [],
+      "allowed_udp_ports": [],
+      "require_approval": true,
+      "resolved_ipv4": [],
+      "resolved_ipv6": [],
+      "resolutions": {},
+      "set_names": {
+        "ipv4": "custom_ipv4",
+        "ipv6": "custom_ipv6",
+        "tcp_ports": "custom_tcp_ports",
+        "udp_ports": "custom_udp_ports"
+      },
+      "runtime_units": {
+        "scope_unit": "codex-net-custom.scope",
+        "slice_unit": "app-codex-net-custom.slice",
+        "mode": "systemd_user",
+        "cgroup_match_level": 7,
+        "cgroup_path": "user.slice/user-1000.slice/user@1000.service/app.slice/app-codex.slice/app-codex-net.slice/app-codex-net-custom.slice"
+      }
+    },
+    "dev_local": {
+      "description": "Loopback and common local development ports.",
+      "allow_localhost": true,
+      "allowed_domains": [
+        "127.0.0.1",
+        "::1",
+        "localhost"
+      ],
+      "allowed_tcp_ports": [
+        80,
+        3000,
+        4173,
+        5000,
+        8000,
+        8080
+      ],
+      "allowed_udp_ports": [],
+      "require_approval": false,
+      "resolved_ipv4": [
+        "127.0.0.1"
+      ],
+      "resolved_ipv6": [
+        "::1"
+      ],
+      "resolutions": {
+        "127.0.0.1": {
+          "ipv4": [
+            "127.0.0.1"
+          ],
+          "ipv6": [],
+          "error": ""
+        },
+        "::1": {
+          "ipv4": [],
+          "ipv6": [
+            "::1"
+          ],
+          "error": ""
+        },
+        "localhost": {
+          "ipv4": [
+            "127.0.0.1"
+          ],
+          "ipv6": [],
+          "error": ""
+        }
+      },
+      "set_names": {
+        "ipv4": "dev_local_ipv4",
+        "ipv6": "dev_local_ipv6",
+        "tcp_ports": "dev_local_tcp_ports",
+        "udp_ports": "dev_local_udp_ports"
+      },
+      "runtime_units": {
+        "scope_unit": "codex-net-dev-local.scope",
+        "slice_unit": "app-codex-net-dev-local.slice",
+        "mode": "systemd_user",
+        "cgroup_match_level": 8,
+        "cgroup_path": "user.slice/user-1000.slice/user@1000.service/app.slice/app-codex.slice/app-codex-net.slice/app-codex-net-dev.slice/app-codex-net-dev-local.slice"
+      }
+    },
+    "git_readonly": {
+      "description": "Read-only Git remote access.",
+      "allow_localhost": true,
+      "allowed_domains": [
+        "api.github.com",
+        "github.com"
+      ],
+      "allowed_tcp_ports": [
+        22,
+        443
+      ],
+      "allowed_udp_ports": [
+        53
+      ],
+      "require_approval": true,
+      "resolved_ipv4": [],
+      "resolved_ipv6": [],
+      "resolutions": {
+        "api.github.com": {
+          "ipv4": [],
+          "ipv6": [],
+          "error": "[Errno -3] Temporary failure in name resolution"
+        },
+        "github.com": {
+          "ipv4": [],
+          "ipv6": [],
+          "error": "[Errno -3] Temporary failure in name resolution"
+        }
+      },
+      "set_names": {
+        "ipv4": "git_readonly_ipv4",
+        "ipv6": "git_readonly_ipv6",
+        "tcp_ports": "git_readonly_tcp_ports",
+        "udp_ports": "git_readonly_udp_ports"
+      },
+      "runtime_units": {
+        "scope_unit": "codex-net-git-readonly.scope",
+        "slice_unit": "app-codex-net-git-readonly.slice",
+        "mode": "systemd_user",
+        "cgroup_match_level": 8,
+        "cgroup_path": "user.slice/user-1000.slice/user@1000.service/app.slice/app-codex.slice/app-codex-net.slice/app-codex-net-git.slice/app-codex-net-git-readonly.slice"
+      }
+    },
+    "offline": {
+      "description": "No remote network access.",
+      "allow_localhost": true,
+      "allowed_domains": [],
+      "allowed_tcp_ports": [],
+      "allowed_udp_ports": [],
+      "require_approval": false,
+      "resolved_ipv4": [],
+      "resolved_ipv6": [],
+      "resolutions": {},
+      "set_names": {
+        "ipv4": "offline_ipv4",
+        "ipv6": "offline_ipv6",
+        "tcp_ports": "offline_tcp_ports",
+        "udp_ports": "offline_udp_ports"
+      },
+      "runtime_units": {
+        "scope_unit": "codex-net-offline.scope",
+        "slice_unit": "app-codex-net-offline.slice",
+        "mode": "systemd_user",
+        "cgroup_match_level": 7,
+        "cgroup_path": "user.slice/user-1000.slice/user@1000.service/app.slice/app-codex.slice/app-codex-net.slice/app-codex-net-offline.slice"
+      }
+    },
+    "registries": {
+      "description": "Common package registries and source hosts.",
+      "allow_localhost": true,
+      "allowed_domains": [
+        "api.github.com",
+        "files.pythonhosted.org",
+        "github.com",
+        "index.crates.io",
+        "pypi.org",
+        "raw.githubusercontent.com",
+        "registry.npmjs.org"
+      ],
+      "allowed_tcp_ports": [
+        443
+      ],
+      "allowed_udp_ports": [
+        53
+      ],
+      "require_approval": true,
+      "resolved_ipv4": [],
+      "resolved_ipv6": [],
+      "resolutions": {
+        "api.github.com": {
+          "ipv4": [],
+          "ipv6": [],
+          "error": "[Errno -3] Temporary failure in name resolution"
+        },
+        "files.pythonhosted.org": {
+          "ipv4": [],
+          "ipv6": [],
+          "error": "[Errno -3] Temporary failure in name resolution"
+        },
+        "github.com": {
+          "ipv4": [],
+          "ipv6": [],
+          "error": "[Errno -3] Temporary failure in name resolution"
+        },
+        "index.crates.io": {
+          "ipv4": [],
+          "ipv6": [],
+          "error": "[Errno -3] Temporary failure in name resolution"
+        },
+        "pypi.org": {
+          "ipv4": [],
+          "ipv6": [],
+          "error": "[Errno -3] Temporary failure in name resolution"
+        },
+        "raw.githubusercontent.com": {
+          "ipv4": [],
+          "ipv6": [],
+          "error": "[Errno -3] Temporary failure in name resolution"
+        },
+        "registry.npmjs.org": {
+          "ipv4": [],
+          "ipv6": [],
+          "error": "[Errno -3] Temporary failure in name resolution"
+        }
+      },
+      "set_names": {
+        "ipv4": "registries_ipv4",
+        "ipv6": "registries_ipv6",
+        "tcp_ports": "registries_tcp_ports",
+        "udp_ports": "registries_udp_ports"
+      },
+      "runtime_units": {
+        "scope_unit": "codex-net-registries.scope",
+        "slice_unit": "app-codex-net-registries.slice",
+        "mode": "systemd_user",
+        "cgroup_match_level": 7,
+        "cgroup_path": "user.slice/user-1000.slice/user@1000.service/app.slice/app-codex.slice/app-codex-net.slice/app-codex-net-registries.slice"
+      }
+    }
+  }
+}

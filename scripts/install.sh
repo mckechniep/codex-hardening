@@ -39,7 +39,6 @@ if [[ -d "${codex_dir}/scripts" ]]; then
 fi
 
 install -m 0644 "${repo_dir}/rules/default.rules" "${codex_dir}/rules/default.rules"
-install -m 0644 "${repo_dir}/policies/network_allowlist.json" "${codex_dir}/policies/network_allowlist.json"
 install -m 0644 "${repo_dir}/hooks/block_destructive.py" "${codex_dir}/hooks/block_destructive.py"
 install -m 0644 "${repo_dir}/hooks/block_network_egress.py" "${codex_dir}/hooks/block_network_egress.py"
 install -m 0644 "${repo_dir}/scripts/codex_net_policy.py" "${codex_dir}/scripts/codex_net_policy.py"
@@ -63,10 +62,10 @@ Backup created at ${backup_dir}
 
 Next steps:
 1. Merge ${repo_dir}/templates/config-hardening-snippet.toml into ${codex_dir}/config.toml
-2. Review ${codex_dir}/policies/network_allowlist.json
-3. Review ${codex_dir}/policies/network_profiles.toml
-4. Add ${codex_dir}/scripts to your PATH if you want to call codex-net directly
-5. If you want real WSL egress enforcement, set backend = "linux_wsl_nft", then run:
+2. Review ${codex_dir}/policies/network_profiles.toml
+3. Add ${codex_dir}/scripts to your PATH if you want to call codex-net directly
+4. On stock WSL, keep backend = "hook_only" for now. It is the supported default.
+5. Only try backend = "linux_wsl_nft" if \`codex-net doctor\` reports nft_socket_expr: ok. Then run:
    ${codex_dir}/scripts/codex-net doctor
    ${codex_dir}/scripts/codex-net apply-rules --sudo
    ${codex_dir}/scripts/codex-net backend-status
