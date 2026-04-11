@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import json
 import os
 import re
 import shlex
@@ -17,6 +18,8 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.11+ has tomllib
 
 
 DEFAULT_PROFILE_PATH = Path.home() / ".codex" / "policies" / "network_profiles.toml"
+DEFAULT_BACKEND_OVERRIDE_PATH = Path.home() / ".codex" / "state" / "codex-net" / "backend_override.json"
+SUPPORTED_BACKENDS = {"hook_only", "linux_wsl_nft", "linux_wsl_netns"}
 NETWORK_TOOLS = {"curl", "wget", "nc", "ncat", "netcat", "ssh", "scp", "rsync"}
 INSPECTED_NETWORK_EXECUTABLES = NETWORK_TOOLS | {"git"}
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
@@ -117,6 +120,82 @@ def profile_path() -> Path:
     return Path(override) if override else DEFAULT_PROFILE_PATH
 
 
+def backend_override_path() -> Path:
+    override = os.environ.get("CODEX_NET_BACKEND_OVERRIDE_PATH")
+    return Path(override) if override else DEFAULT_BACKEND_OVERRIDE_PATH
+
+
+def load_backend_override(path: Path | None = None) -> str | None:
+    path = path or backend_override_path()
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise PolicyError(f"Could not load backend override {path}: {exc}") from exc
+
+    backend = str(payload.get("backend", "")).strip()
+    if backend not in SUPPORTED_BACKENDS:
+        raise PolicyError(f"Backend override {path} references unsupported backend `{backend}`.")
+    return backend
+
+
+def write_backend_override(backend: str, path: Path | None = None) -> Path:
+    normalized = str(backend).strip()
+    if normalized not in SUPPORTED_BACKENDS:
+        raise PolicyError(f"Unsupported network backend `{normalized}`.")
+    path = path or backend_override_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"backend": normalized}, indent=2) + "\n")
+    return path
+
+
+def clear_backend_override(path: Path | None = None) -> Path:
+    path = path or backend_override_path()
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    return path
+
+
+def persist_backend_selection(path: Path, backend: str) -> tuple[str | None, str]:
+    normalized = str(backend).strip()
+    if normalized not in SUPPORTED_BACKENDS:
+        raise PolicyError(f"Unsupported network backend `{normalized}`.")
+
+    existing_text = path.read_text() if path.exists() else ""
+    previous_backend = None
+    lines = existing_text.splitlines()
+    replaced = False
+    backend_pattern = re.compile(r'^(\s*backend\s*=\s*)".*?"(\s*(?:#.*)?)$')
+
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("["):
+            break
+        match = backend_pattern.match(line)
+        if not match:
+            continue
+        previous_backend = line.split("=", 1)[1].strip().strip('"').split("#", 1)[0].strip()
+        lines[index] = f'{match.group(1)}"{normalized}"{match.group(2)}'
+        replaced = True
+        break
+
+    if not replaced:
+        insert_at = 0
+        while insert_at < len(lines) and (not lines[insert_at].strip() or lines[insert_at].strip().startswith("#")):
+            insert_at += 1
+        lines.insert(insert_at, f'backend = "{normalized}"')
+
+    rendered = "\n".join(lines).rstrip() + "\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(rendered)
+    return previous_backend, normalized
+
+
 def _string_map(value: object) -> dict[str, str]:
     if not isinstance(value, dict):
         return {}
@@ -190,8 +269,17 @@ def load_network_profiles(path: Path | None = None) -> dict | None:
     tool_profiles = DEFAULT_TOOL_PROFILES | _string_map(data.get("tool_profiles", {}))
     command_profiles = _string_map(data.get("command_profiles", {}))
 
+    configured_backend = str(data.get("backend", "hook_only")).strip() or "hook_only"
+    if configured_backend not in SUPPORTED_BACKENDS:
+        raise PolicyError(f"Network profile config {path} references unsupported backend `{configured_backend}`.")
+
+    backend_override = load_backend_override()
+    effective_backend = backend_override or configured_backend
+
     return {
-        "backend": str(data.get("backend", "hook_only")).strip() or "hook_only",
+        "backend": effective_backend,
+        "configured_backend": configured_backend,
+        "backend_override": backend_override,
         "default_profile": default_profile,
         "command_profiles": command_profiles,
         "tool_profiles": tool_profiles,

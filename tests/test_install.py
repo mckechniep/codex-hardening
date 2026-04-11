@@ -53,8 +53,14 @@ class InstallScriptTests(unittest.TestCase):
             self.assertTrue((codex_dir / "rules" / "default.rules").exists())
             self.assertTrue((codex_dir / "scripts" / "codex-net").exists())
             self.assertTrue((codex_dir / "scripts" / "codex_net_netns.py").exists())
+            self.assertTrue((codex_dir / "scripts" / "merge_config.py").exists())
             self.assertFalse((codex_dir / "policies" / "network_allowlist.json").exists())
-            self.assertEqual((codex_dir / "config.toml").read_text(), 'model = "test-model"\n')
+            config_text = (codex_dir / "config.toml").read_text()
+            self.assertIn('model = "test-model"\n', config_text)
+            self.assertIn('approval_policy = "on-request"', config_text)
+            self.assertIn('sandbox_mode = "workspace-write"', config_text)
+            self.assertIn("[features]", config_text)
+            self.assertIn("codex_hooks = true", config_text)
             self.assertEqual(
                 (codex_dir / "policies" / "network_profiles.toml").read_text(),
                 "# keep me\nbackend = \"hook_only\"\n",
@@ -73,6 +79,7 @@ class InstallScriptTests(unittest.TestCase):
             backups = list((codex_dir / "backups").glob("codex-hardening-*"))
             self.assertEqual(len(backups), 1)
             self.assertNotIn("network_allowlist.json", result.stdout)
+            self.assertIn("Config merge summary:", result.stdout)
 
 
 if __name__ == "__main__":

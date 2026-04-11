@@ -16,6 +16,7 @@ def cli_env(tmpdir: str) -> dict[str, str]:
     env["CODEX_NET_POLICY_PATH"] = str(POLICY)
     env["CODEX_NET_STATE_PATH"] = str(Path(tmpdir) / "backend_state.json")
     env["CODEX_NET_COMPILED_DIR"] = str(Path(tmpdir) / "compiled")
+    env["CODEX_NET_BACKEND_OVERRIDE_PATH"] = str(Path(tmpdir) / "backend_override.json")
     return env
 
 
@@ -48,8 +49,62 @@ class CodexNetCliTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn(f"path: {POLICY}", result.stdout)
+            self.assertIn("configured_backend: hook_only", result.stdout)
+            self.assertIn("backend_override: None", result.stdout)
             self.assertIn("backend: hook_only", result.stdout)
             self.assertIn("default_profile: offline", result.stdout)
+
+    def test_backend_set_temporary_override_is_reflected_in_show_config(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            env = cli_env(tmpdir)
+            set_result = subprocess.run(
+                [str(CLI), "backend-set", "linux_wsl_netns"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(set_result.returncode, 0, set_result.stderr)
+            self.assertIn("selection: temporary", set_result.stdout)
+
+            show_result = subprocess.run(
+                [str(CLI), "show-config"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(show_result.returncode, 0, show_result.stderr)
+            self.assertIn("configured_backend: hook_only", show_result.stdout)
+            self.assertIn("backend_override: linux_wsl_netns", show_result.stdout)
+            self.assertIn("backend: linux_wsl_netns", show_result.stdout)
+
+            clear_result = subprocess.run(
+                [str(CLI), "backend-clear"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(clear_result.returncode, 0, clear_result.stderr)
+            self.assertIn("cleared: true", clear_result.stdout)
+
+    def test_autoexec_blocks_implicit_command_on_hook_only_backend_before_execution(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            result = subprocess.run(
+                [str(CLI), "autoexec", "--", "git", "fetch", "origin"],
+                cwd=ROOT,
+                env=cli_env(tmpdir),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("hook_only backend can only validate commands with explicit network targets", result.stderr)
 
     def test_backend_status_json_reports_missing_state(self) -> None:
         with TemporaryDirectory() as tmpdir:

@@ -44,6 +44,7 @@ install -m 0644 "${repo_dir}/hooks/block_network_egress.py" "${codex_dir}/hooks/
 install -m 0644 "${repo_dir}/scripts/codex_net_policy.py" "${codex_dir}/scripts/codex_net_policy.py"
 install -m 0644 "${repo_dir}/scripts/codex_net_netns.py" "${codex_dir}/scripts/codex_net_netns.py"
 install -m 0644 "${repo_dir}/scripts/codex_net_wsl.py" "${codex_dir}/scripts/codex_net_wsl.py"
+install -m 0755 "${repo_dir}/scripts/merge_config.py" "${codex_dir}/scripts/merge_config.py"
 install -m 0755 "${repo_dir}/scripts/codex_net_backend.py" "${codex_dir}/scripts/codex_net_backend.py"
 install -m 0755 "${repo_dir}/scripts/codex-net" "${codex_dir}/scripts/codex-net"
 
@@ -55,6 +56,7 @@ python3 "${repo_dir}/scripts/merge_hooks.py" \
   "${repo_dir}/templates/hooks.json.template" \
   "${codex_dir}/hooks.json"
 
+config_merge_output="$("${codex_dir}/scripts/merge_config.py" "${repo_dir}/templates/config-hardening-snippet.toml" "${codex_dir}/config.toml" 2>/dev/null || true)"
 doctor_output="$("${codex_dir}/scripts/codex-net" doctor 2>/dev/null || true)"
 
 cat <<EOF
@@ -62,16 +64,23 @@ Installed Codex hardening assets into ${codex_dir}
 Backup created at ${backup_dir}
 
 Next steps:
-1. Merge ${repo_dir}/templates/config-hardening-snippet.toml into ${codex_dir}/config.toml
-2. Review ${codex_dir}/policies/network_profiles.toml
-3. Add ${codex_dir}/scripts to your PATH if you want to call codex-net directly
-4. On stock WSL, keep backend = "hook_only" for now. It is the supported default.
-5. Only try backend = "linux_wsl_nft" if \`codex-net doctor\` reports nft_socket_expr: ok. Then run:
+1. Review ${codex_dir}/config.toml and ${codex_dir}/policies/network_profiles.toml
+2. Add ${codex_dir}/scripts to your PATH if you want to call codex-net directly
+3. On stock WSL, keep backend = "hook_only" for now. It is the supported default.
+4. Only try backend = "linux_wsl_nft" if \`codex-net doctor\` reports nft_socket_expr: ok. Then run:
    ${codex_dir}/scripts/codex-net doctor
    ${codex_dir}/scripts/codex-net apply-rules --sudo
    ${codex_dir}/scripts/codex-net backend-status
-6. Restart Codex
+5. Restart Codex
 EOF
+
+if [[ -n "${config_merge_output}" ]]; then
+  cat <<EOF
+
+Config merge summary:
+${config_merge_output}
+EOF
+fi
 
 if [[ -n "${doctor_output}" ]]; then
   cat <<EOF

@@ -86,16 +86,15 @@ This repo intentionally does not include any real `history.jsonl`, `auth.json`, 
 
 1. Clone this repo.
 2. Run `scripts/install.sh`.
-3. Open `~/.codex/config.toml`.
-4. Merge in the settings from `templates/config-hardening-snippet.toml`.
-5. Restart Codex.
+3. Review the install summary for any config conflicts it skipped.
+4. Restart Codex.
 
 The install script copies hooks, rules, policies, and helper scripts into `~/.codex`, and merges the hardening hooks into `~/.codex/hooks.json`.
-It does not overwrite the full `~/.codex/config.toml`, because most developers already have model, plugin, and trusted-project settings there.
+It now also runs a safe config merge into `~/.codex/config.toml`: missing hardening settings are added automatically, but conflicting existing user settings are left unchanged and reported in the install summary.
 
-## Manual Merge Notes
+## Config Merge Notes
 
-Merge the following concepts into `~/.codex/config.toml`:
+The config merge script manages these settings:
 
 - `approval_policy = "on-request"`
 - `sandbox_mode = "workspace-write"`
@@ -106,7 +105,7 @@ Merge the following concepts into `~/.codex/config.toml`:
 - `[shell_environment_policy] inherit = "core"`
 - `[shell_environment_policy] include_only = [...]`
 
-Do not blindly replace an existing `config.toml` if it contains:
+It intentionally does not force-overwrite conflicting values in an existing `config.toml` if it contains:
 
 - trusted project entries
 - plugin settings
@@ -201,7 +200,12 @@ Today, the workflow is:
 
 - direct shell network commands are blocked when a network profile config is present
 - wrapped commands must go through `codex-net exec --profile ... -- ...`
+- `codex-net autoexec -- ...` can now choose the mapped profile automatically for common commands such as `git fetch origin`, `npm ci`, or `curl https://github.com`
 - the wrapper validates the selected profile before launching the command
+- `codex-net backend-info` explains the available backends, their readiness, and the current effective selection
+- `codex-net backend-set <backend>` enables a backend temporarily through an override file instead of permanently editing the user's policy
+- `codex-net backend-set <backend> --persist` writes the backend into `network_profiles.toml` when the user explicitly wants that
+- `codex-net backend-clear` removes the temporary override and returns to the configured backend from `network_profiles.toml`
 - `codex-net doctor` checks whether the WSL nftables backend prerequisites are present
 - `codex-net compile-profiles` resolves domains and renders nftables-friendly set files for the next backend step
 - `codex-net apply-rules --sudo` prepares the profile slices, validates, replaces, and applies the generated nftables table for the configured backend
@@ -245,6 +249,23 @@ Current caveat for that backend:
 - explicit `localhost` targets are rejected, because namespace loopback is not host loopback yet
 - if you need a host-local service, wrap the command through a shell and use `$CODEX_NET_HOST_GATEWAY`, for example `codex-net exec --profile dev_local -- sh -lc 'curl http://$CODEX_NET_HOST_GATEWAY:3000'`
 - allowed hostnames currently resolve through the generated `hosts` file, so the backend fails closed if a profile domain cannot be resolved before launch
+
+Beginner-friendly backend selection flow:
+
+```bash
+~/.codex/scripts/codex-net backend-info
+~/.codex/scripts/codex-net backend-set linux_wsl_netns --prepare --sudo
+~/.codex/scripts/codex-net autoexec -- git fetch origin
+~/.codex/scripts/codex-net backend-clear --teardown --sudo
+```
+
+That sequence:
+
+- explains the backends and readiness
+- enables `linux_wsl_netns` temporarily without permanently editing the user's policy file
+- prepares its runtime state
+- runs a networked command with automatic profile selection
+- tears it down and returns to the configured default backend
 
 Important kernel requirement:
 

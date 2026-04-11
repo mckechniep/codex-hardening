@@ -46,6 +46,12 @@ def wrapped_command_text(profile: str, nested_tokens: list[str]) -> str:
     return f"{wrapper} exec --profile {profile} -- {nested}".strip()
 
 
+def auto_wrapped_command_text(nested_tokens: list[str]) -> str:
+    nested = shlex.join(nested_tokens)
+    wrapper = shlex.quote(str(WRAPPER_PATH))
+    return f"{wrapper} autoexec -- {nested}".strip()
+
+
 def first_request_issue(requests: list[NetworkRequest]) -> str | None:
     for request in requests:
         if request.issue:
@@ -93,7 +99,7 @@ def profile_mode(command: str, config: dict) -> None:
             suggested_profile = intent.profile or "<profile>"
             deny(
                 "Direct network commands must use codex-net. "
-                f"Retry as `{wrapped_command_text(suggested_profile, segment)}`."
+                f"Retry as `{auto_wrapped_command_text(segment)}` or `{wrapped_command_text(suggested_profile, segment)}`."
             )
 
 

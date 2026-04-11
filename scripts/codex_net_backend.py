@@ -8,7 +8,17 @@ import subprocess
 import sys
 from pathlib import Path
 
-from codex_net_policy import PolicyError, load_network_profiles, validate_command_for_profile
+from codex_net_policy import (
+    PolicyError,
+    SUPPORTED_BACKENDS,
+    backend_override_path,
+    clear_backend_override,
+    load_network_profiles,
+    persist_backend_selection,
+    select_profile_for_command,
+    validate_command_for_profile,
+    write_backend_override,
+)
 from codex_net_netns import (
     apply_netns_base,
     netns_backend_status_report,
@@ -38,9 +48,37 @@ def parser() -> argparse.ArgumentParser:
     exec_parser = subcommands.add_parser("exec", help="Run a command under a named Codex network profile.")
     exec_parser.add_argument("--profile", help="Profile to use. Defaults to the config default profile.")
     exec_parser.add_argument("wrapped_command", nargs=argparse.REMAINDER, help="Command to run after `--`.")
+    autoexec_parser = subcommands.add_parser(
+        "autoexec",
+        help="Run a command under an automatically selected profile when a command mapping exists.",
+    )
+    autoexec_parser.add_argument("wrapped_command", nargs=argparse.REMAINDER, help="Command to run after `--`.")
 
     subcommands.add_parser("list-profiles", help="List the available network profiles.")
     subcommands.add_parser("show-config", help="Show the loaded network profile config path and backend.")
+    subcommands.add_parser("backend-info", help="Explain available backends and show the current effective selection.")
+    backend_set_parser = subcommands.add_parser(
+        "backend-set",
+        help="Select a backend temporarily via override, or persist it into the policy file.",
+    )
+    backend_set_parser.add_argument("backend_name", choices=sorted(SUPPORTED_BACKENDS))
+    backend_set_parser.add_argument("--persist", action="store_true", help="Write the backend into network_profiles.toml.")
+    backend_set_parser.add_argument(
+        "--prepare",
+        action="store_true",
+        help="If the selected backend needs runtime preparation, run apply-rules after selecting it.",
+    )
+    backend_set_parser.add_argument("--sudo", action="store_true", help="Run preparation via sudo when needed.")
+    backend_clear_parser = subcommands.add_parser(
+        "backend-clear",
+        help="Clear the temporary backend override and return to the configured backend in network_profiles.toml.",
+    )
+    backend_clear_parser.add_argument(
+        "--teardown",
+        action="store_true",
+        help="Run remove-rules against the currently effective backend before clearing the override.",
+    )
+    backend_clear_parser.add_argument("--sudo", action="store_true", help="Run teardown via sudo when needed.")
     doctor_parser = subcommands.add_parser("doctor", help="Check WSL nftables backend readiness.")
     doctor_parser.add_argument("--json", action="store_true", help="Print the doctor report as JSON.")
     compile_parser = subcommands.add_parser(
@@ -81,20 +119,19 @@ def load_config() -> dict:
     return config
 
 
-def cmd_exec(args: argparse.Namespace) -> int:
-    config = load_config()
-    profile = args.profile or config["default_profile"]
-    wrapped_command = list(args.wrapped_command)
+def _normalized_wrapped_command(raw: list[str]) -> list[str]:
+    wrapped_command = list(raw)
     if wrapped_command and wrapped_command[0] == "--":
         wrapped_command = wrapped_command[1:]
-    if not wrapped_command:
-        raise PolicyError("`codex-net exec` requires a wrapped command after `--`.")
+    return wrapped_command
 
+
+def _run_wrapped_command(config: dict, profile: str, wrapped_command: list[str]) -> int:
     command_text = shlex.join(wrapped_command)
     validate_command_for_profile(command_text, profile, config)
 
     backend = config["backend"]
-    if backend not in {"hook_only", "linux_wsl_nft", "linux_wsl_netns"}:
+    if backend not in SUPPORTED_BACKENDS:
         raise PolicyError(f"Unsupported network backend `{backend}`.")
 
     if backend == "linux_wsl_nft":
@@ -121,6 +158,33 @@ def cmd_exec(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_exec(args: argparse.Namespace) -> int:
+    config = load_config()
+    profile = args.profile or config["default_profile"]
+    wrapped_command = _normalized_wrapped_command(args.wrapped_command)
+    if not wrapped_command:
+        raise PolicyError("`codex-net exec` requires a wrapped command after `--`.")
+    return _run_wrapped_command(config, profile, wrapped_command)
+
+
+def cmd_autoexec(args: argparse.Namespace) -> int:
+    config = load_config()
+    wrapped_command = _normalized_wrapped_command(args.wrapped_command)
+    if not wrapped_command:
+        raise PolicyError("`codex-net autoexec` requires a wrapped command after `--`.")
+
+    command_text = shlex.join(wrapped_command)
+    profile = select_profile_for_command(config, command_text)
+    if not profile:
+        raise PolicyError(
+            "No network profile mapping matched this command. Use `codex-net exec --profile <name> -- ...` "
+            "or update tool_profiles/command_profiles first."
+        )
+
+    print(f"selected_profile: {profile}")
+    return _run_wrapped_command(config, profile, wrapped_command)
+
+
 def cmd_list_profiles() -> int:
     config = load_config()
     default_profile = config["default_profile"]
@@ -134,8 +198,39 @@ def cmd_list_profiles() -> int:
 def cmd_show_config() -> int:
     config = load_config()
     print(f"path: {config['path']}")
+    print(f"configured_backend: {config.get('configured_backend')}")
+    print(f"backend_override: {config.get('backend_override')}")
     print(f"backend: {config['backend']}")
     print(f"default_profile: {config['default_profile']}")
+    return 0
+
+
+def _backend_descriptions() -> dict[str, str]:
+    return {
+        "hook_only": "Blocks direct network shell commands and forces explicit codex-net usage, but does not provide packet isolation.",
+        "linux_wsl_nft": "Uses nftables plus systemd scope/cgroup binding for stronger enforcement, but requires kernel nft socket support.",
+        "linux_wsl_netns": "Uses a fresh network namespace per command for stronger stock-WSL enforcement, with a little startup overhead and host-local caveats.",
+    }
+
+
+def cmd_backend_info() -> int:
+    config = load_config()
+    wsl_report = doctor_report()
+    netns_report = netns_doctor_report()
+    print(f"path: {config['path']}")
+    print(f"configured_backend: {config.get('configured_backend')}")
+    print(f"backend_override: {config.get('backend_override')}")
+    print(f"effective_backend: {config['backend']}")
+    print(f"override_path: {backend_override_path()}")
+    print("available_backends:")
+    for backend, description in _backend_descriptions().items():
+        readiness = "ready"
+        if backend == "linux_wsl_nft":
+            readiness = "ready" if wsl_report["ready"] else "not_ready"
+        if backend == "linux_wsl_netns":
+            readiness = "ready" if netns_report["ready"] else "not_ready"
+        print(f"  {backend}: {readiness}")
+        print(f"    {description}")
     return 0
 
 
@@ -191,8 +286,7 @@ def cmd_compile_profiles(output_dir: str | None, print_nft: bool) -> int:
     return 0
 
 
-def cmd_apply_rules(output_dir: str | None, use_sudo: bool, print_only: bool) -> int:
-    config = load_config()
+def _apply_rules_for_config(config: dict, output_dir: str | None, use_sudo: bool, print_only: bool) -> int:
     if config["backend"] == "linux_wsl_netns":
         details = apply_netns_base(config, use_sudo=use_sudo)
         write_backend_state(
@@ -227,8 +321,11 @@ def cmd_apply_rules(output_dir: str | None, use_sudo: bool, print_only: bool) ->
     return 0
 
 
-def cmd_remove_rules(use_sudo: bool) -> int:
-    config = load_config()
+def cmd_apply_rules(output_dir: str | None, use_sudo: bool, print_only: bool) -> int:
+    return _apply_rules_for_config(load_config(), output_dir, use_sudo, print_only)
+
+
+def _remove_rules_for_config(config: dict, use_sudo: bool) -> int:
     if config["backend"] == "linux_wsl_netns":
         details = remove_netns_base(config, use_sudo=use_sudo)
         write_backend_state(None, applied=False, extra=details)
@@ -243,6 +340,10 @@ def cmd_remove_rules(use_sudo: bool) -> int:
     print(f"table_name: {details['table_name']}")
     print(f"removed: {details['removed']}")
     return 0
+
+
+def cmd_remove_rules(use_sudo: bool) -> int:
+    return _remove_rules_for_config(load_config(), use_sudo)
 
 
 def cmd_backend_status(as_json: bool) -> int:
@@ -272,6 +373,39 @@ def cmd_backend_status(as_json: bool) -> int:
     return 0
 
 
+def cmd_backend_set(args: argparse.Namespace) -> int:
+    config = load_config()
+    if args.persist:
+        previous_backend, selected_backend = persist_backend_selection(Path(config["path"]), args.backend_name)
+        clear_backend_override()
+        print("selection: persistent")
+        print(f"path: {config['path']}")
+        print(f"previous_backend: {previous_backend}")
+        print(f"backend: {selected_backend}")
+    else:
+        path = write_backend_override(args.backend_name)
+        print("selection: temporary")
+        print(f"override_path: {path}")
+        print(f"backend: {args.backend_name}")
+        print("rollback: codex-net backend-clear")
+
+    if args.prepare and args.backend_name != "hook_only":
+        refreshed = load_config()
+        return _apply_rules_for_config(refreshed, output_dir=None, use_sudo=args.sudo, print_only=False)
+    return 0
+
+
+def cmd_backend_clear(args: argparse.Namespace) -> int:
+    current = load_config()
+    if args.teardown and current["backend"] != "hook_only":
+        _remove_rules_for_config(current, use_sudo=args.sudo)
+    path = clear_backend_override()
+    print(f"override_path: {path}")
+    print("cleared: true")
+    print(f"effective_backend: {load_config()['backend']}")
+    return 0
+
+
 def cmd_netns_spike(args: argparse.Namespace) -> int:
     wrapped_command = list(args.wrapped_command)
     if wrapped_command and wrapped_command[0] == "--":
@@ -293,10 +427,18 @@ def main() -> int:
     args = parser().parse_args()
     if args.command == "exec":
         return cmd_exec(args)
+    if args.command == "autoexec":
+        return cmd_autoexec(args)
     if args.command == "list-profiles":
         return cmd_list_profiles()
     if args.command == "show-config":
         return cmd_show_config()
+    if args.command == "backend-info":
+        return cmd_backend_info()
+    if args.command == "backend-set":
+        return cmd_backend_set(args)
+    if args.command == "backend-clear":
+        return cmd_backend_clear(args)
     if args.command == "doctor":
         return cmd_doctor(args.json)
     if args.command == "compile-profiles":

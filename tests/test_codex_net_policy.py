@@ -1,6 +1,8 @@
+import os
 import sys
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -9,11 +11,14 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from codex_net_policy import (  # noqa: E402
     NetworkIntent,
     PolicyError,
+    clear_backend_override,
     collect_network_requests,
     inspect_network_intent,
     load_network_profiles,
+    persist_backend_selection,
     select_profile_for_command,
     validate_command_for_profile,
+    write_backend_override,
 )
 
 
@@ -122,6 +127,41 @@ class ValidateCommandForProfileTests(unittest.TestCase):
     def test_blocks_local_port_outside_profile(self) -> None:
         with self.assertRaisesRegex(PolicyError, "does not allow localhost TCP port 9999"):
             validate_command_for_profile("curl http://localhost:9999", "dev_local", CONFIG)
+
+
+class BackendSelectionTests(unittest.TestCase):
+    def test_load_network_profiles_applies_temporary_backend_override(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            override_path = Path(tmpdir) / "backend_override.json"
+            previous = os.environ.get("CODEX_NET_BACKEND_OVERRIDE_PATH")
+            os.environ["CODEX_NET_BACKEND_OVERRIDE_PATH"] = str(override_path)
+            self.addCleanup(
+                lambda: os.environ.__setitem__("CODEX_NET_BACKEND_OVERRIDE_PATH", previous)
+                if previous is not None
+                else os.environ.pop("CODEX_NET_BACKEND_OVERRIDE_PATH", None)
+            )
+
+            write_backend_override("linux_wsl_netns")
+            config = load_network_profiles(ROOT / "policies" / "network_profiles.toml")
+            self.assertEqual(config["configured_backend"], "hook_only")
+            self.assertEqual(config["backend_override"], "linux_wsl_netns")
+            self.assertEqual(config["backend"], "linux_wsl_netns")
+
+            clear_backend_override()
+            config = load_network_profiles(ROOT / "policies" / "network_profiles.toml")
+            self.assertEqual(config["backend_override"], None)
+            self.assertEqual(config["backend"], "hook_only")
+
+    def test_persist_backend_selection_rewrites_policy_backend_line(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            policy_path = Path(tmpdir) / "network_profiles.toml"
+            policy_path.write_text('backend = "hook_only"\ndefault_profile = "offline"\n[profiles.offline]\nallowed_domains=[]\n')
+
+            previous_backend, selected_backend = persist_backend_selection(policy_path, "linux_wsl_netns")
+
+            self.assertEqual(previous_backend, "hook_only")
+            self.assertEqual(selected_backend, "linux_wsl_netns")
+            self.assertIn('backend = "linux_wsl_netns"', policy_path.read_text())
 
 
 if __name__ == "__main__":
