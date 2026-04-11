@@ -309,6 +309,12 @@ def select_exec_rules_context(config: dict, token: str, *, use_sudo: bool) -> di
     }
 
 
+def reject_expression_for_family(family: str) -> str:
+    if family == "ip":
+        return "reject with icmp type admin-prohibited"
+    return "reject with icmpx admin-prohibited"
+
+
 def render_exec_rules(
     config: dict,
     token: str,
@@ -322,6 +328,9 @@ def render_exec_rules(
     tcp_ports = profile["allowed_tcp_ports"]
     udp_ports = profile["allowed_udp_ports"]
     mode = rules_context["mode"]
+    reject_expression = reject_expression_for_family(
+        rules_context["filter_family"] if mode == "global_host_chains" else "inet"
+    )
 
     if mode == "global_host_chains":
         lines = [
@@ -370,7 +379,7 @@ def render_exec_rules(
             [
                 (
                     f"add rule {rules_context['filter_family']} {rules_context['filter_table']} "
-                    f'{rules_context["filter_exec_chain"]} reject with icmpx admin-prohibited'
+                    f'{rules_context["filter_exec_chain"]} {reject_expression}'
                 ),
                 f"add chain {rules_context['nat_family']} {rules_context['nat_table']} {rules_context['nat_exec_chain']}",
                 (
@@ -419,7 +428,7 @@ def render_exec_rules(
 
     lines.extend(
         [
-            f'        iifname "{host_veth}" reject with icmpx admin-prohibited',
+            f'        iifname "{host_veth}" {reject_expression}',
             "    }",
             "",
             "    chain codex_exec_postrouting {",

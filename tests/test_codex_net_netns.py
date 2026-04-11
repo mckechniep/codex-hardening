@@ -18,6 +18,7 @@ from codex_net_netns import (
     netns_backend_status_report,
     netns_base_rules_path,
     netns_doctor_report,
+    reject_expression_for_family,
     render_exec_rules,
     run_netns_exec,
     run_netns_spike,
@@ -294,6 +295,10 @@ class NetnsBackendStateTests(unittest.TestCase):
 
 
 class NetnsExecRulesTests(unittest.TestCase):
+    def test_reject_expression_matches_family(self) -> None:
+        self.assertEqual(reject_expression_for_family("ip"), "reject with icmp type admin-prohibited")
+        self.assertEqual(reject_expression_for_family("inet"), "reject with icmpx admin-prohibited")
+
     def test_render_exec_rules_contains_profile_specific_allowlist(self) -> None:
         rendered = render_exec_rules(
             sample_config(),
@@ -348,6 +353,7 @@ class NetnsExecRulesTests(unittest.TestCase):
 
         self.assertIn("add chain ip filter codex_exec_fwd_abcd1234", rendered)
         self.assertIn('add rule ip filter FORWARD iifname "cnhabcd1234" jump codex_exec_fwd_abcd1234', rendered)
+        self.assertIn("reject with icmp type admin-prohibited", rendered)
         self.assertIn('add rule ip nat POSTROUTING ip saddr 10.203.10.0/30 oifname != "cnhabcd1234" jump codex_exec_nat_abcd1234', rendered)
         self.assertIn("add rule ip nat codex_exec_nat_abcd1234 masquerade", rendered)
 
