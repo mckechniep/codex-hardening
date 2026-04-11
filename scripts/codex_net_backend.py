@@ -79,6 +79,23 @@ def parser() -> argparse.ArgumentParser:
         help="Run remove-rules against the currently effective backend before clearing the override.",
     )
     backend_clear_parser.add_argument("--sudo", action="store_true", help="Run teardown via sudo when needed.")
+    use_parser = subcommands.add_parser(
+        "use",
+        help="Friendly backend chooser. `hook_only`, `netns`, and `default` cover the common cases.",
+    )
+    use_parser.add_argument("backend_choice", help="One of: default, hook_only, netns, nft.")
+    use_parser.add_argument("--persist", action="store_true", help="Write the backend into network_profiles.toml.")
+    use_parser.add_argument(
+        "--prepare",
+        action="store_true",
+        help="If the selected backend needs runtime preparation, run apply-rules after selecting it.",
+    )
+    use_parser.add_argument("--sudo", action="store_true", help="Run preparation or teardown via sudo when needed.")
+    use_parser.add_argument(
+        "--teardown",
+        action="store_true",
+        help="When choosing `default`, tear down the active backend before clearing the override.",
+    )
     doctor_parser = subcommands.add_parser("doctor", help="Check WSL nftables backend readiness.")
     doctor_parser.add_argument("--json", action="store_true", help="Print the doctor report as JSON.")
     compile_parser = subcommands.add_parser(
@@ -213,24 +230,74 @@ def _backend_descriptions() -> dict[str, str]:
     }
 
 
-def cmd_backend_info() -> int:
-    config = load_config()
+def _backend_labels() -> dict[str, str]:
+    return {
+        "hook_only": "Light mode",
+        "linux_wsl_nft": "Kernel nftables mode",
+        "linux_wsl_netns": "Isolated namespace mode",
+    }
+
+
+def _friendly_backend_choice(choice: str) -> str | None:
+    normalized = str(choice).strip().lower()
+    aliases = {
+        "default": None,
+        "hook_only": "hook_only",
+        "hook": "hook_only",
+        "light": "hook_only",
+        "netns": "linux_wsl_netns",
+        "linux_wsl_netns": "linux_wsl_netns",
+        "namespace": "linux_wsl_netns",
+        "isolated": "linux_wsl_netns",
+        "nft": "linux_wsl_nft",
+        "linux_wsl_nft": "linux_wsl_nft",
+    }
+    if normalized not in aliases:
+        raise PolicyError(
+            "Unknown backend choice. Use one of: default, hook_only, netns, nft."
+        )
+    return aliases[normalized]
+
+
+def _backend_readiness_map() -> dict[str, bool]:
     wsl_report = doctor_report()
     netns_report = netns_doctor_report()
+    return {
+        "hook_only": True,
+        "linux_wsl_nft": bool(wsl_report["ready"]),
+        "linux_wsl_netns": bool(netns_report["ready"]),
+    }
+
+
+def _backend_next_command(backend: str) -> str:
+    if backend == "hook_only":
+        return "~/.codex/scripts/codex-net use hook_only"
+    if backend == "linux_wsl_netns":
+        return "~/.codex/scripts/codex-net use netns --prepare --sudo"
+    return "~/.codex/scripts/codex-net use nft --prepare --sudo"
+
+
+def cmd_backend_info() -> int:
+    config = load_config()
+    readiness = _backend_readiness_map()
+    source = "temporary override" if config.get("backend_override") else "policy file"
     print(f"path: {config['path']}")
     print(f"configured_backend: {config.get('configured_backend')}")
     print(f"backend_override: {config.get('backend_override')}")
     print(f"effective_backend: {config['backend']}")
+    print(f"selection_source: {source}")
     print(f"override_path: {backend_override_path()}")
-    print("available_backends:")
-    for backend, description in _backend_descriptions().items():
-        readiness = "ready"
-        if backend == "linux_wsl_nft":
-            readiness = "ready" if wsl_report["ready"] else "not_ready"
-        if backend == "linux_wsl_netns":
-            readiness = "ready" if netns_report["ready"] else "not_ready"
-        print(f"  {backend}: {readiness}")
-        print(f"    {description}")
+    print("backend_choices:")
+    descriptions = _backend_descriptions()
+    labels = _backend_labels()
+    for backend in ("hook_only", "linux_wsl_netns", "linux_wsl_nft"):
+        status = "ready" if readiness[backend] else "not_ready"
+        current = " (current)" if config["backend"] == backend else ""
+        print(f"  {backend}{current}: {labels[backend]} [{status}]")
+        print(f"    {descriptions[backend]}")
+        print(f"    choose: {_backend_next_command(backend)}")
+    print("rollback:")
+    print("  ~/.codex/scripts/codex-net use default --teardown --sudo")
     return 0
 
 
@@ -406,6 +473,28 @@ def cmd_backend_clear(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_use(args: argparse.Namespace) -> int:
+    selected = _friendly_backend_choice(args.backend_choice)
+    if selected is None:
+        if args.persist:
+            raise PolicyError("`codex-net use default` returns to the configured backend, so `--persist` does not apply.")
+        if args.prepare:
+            raise PolicyError("`codex-net use default` clears the temporary override, so `--prepare` does not apply.")
+        synthetic_args = argparse.Namespace(teardown=args.teardown, sudo=args.sudo)
+        return cmd_backend_clear(synthetic_args)
+
+    if args.teardown:
+        raise PolicyError("`--teardown` only applies to `codex-net use default`.")
+
+    synthetic_args = argparse.Namespace(
+        backend_name=selected,
+        persist=args.persist,
+        prepare=args.prepare,
+        sudo=args.sudo,
+    )
+    return cmd_backend_set(synthetic_args)
+
+
 def cmd_netns_spike(args: argparse.Namespace) -> int:
     wrapped_command = list(args.wrapped_command)
     if wrapped_command and wrapped_command[0] == "--":
@@ -439,6 +528,8 @@ def main() -> int:
         return cmd_backend_set(args)
     if args.command == "backend-clear":
         return cmd_backend_clear(args)
+    if args.command == "use":
+        return cmd_use(args)
     if args.command == "doctor":
         return cmd_doctor(args.json)
     if args.command == "compile-profiles":

@@ -46,8 +46,10 @@ AgentShield helped shape the audit mindset behind this repo: scan the agent surf
   Blocks outbound shell network usage unless it matches a configured network profile
 - `policies/network_profiles.toml`
   Profile-based network policy used by `codex-net`
+- `scripts/enable.sh`
+  Guided first-run entrypoint that installs the assets and then prints backend choices
 - `scripts/install.sh`
-  Copies the shareable assets into `~/.codex`
+  Lower-level installer that copies the shareable assets into `~/.codex`
 - `scripts/codex-net`
   Wrapper entrypoint for profile-based network execution, installed to `~/.codex/scripts/codex-net`
 - `scripts/codex_net_wsl.py`
@@ -85,12 +87,12 @@ This repo intentionally does not include any real `history.jsonl`, `auth.json`, 
 ## Recommended Install Flow
 
 1. Clone this repo.
-2. Run `scripts/install.sh`.
-3. Review the install summary for any config conflicts it skipped.
+2. Run `scripts/enable.sh`.
+3. Pick a backend explicitly from the commands it prints.
 4. Restart Codex.
 
-The install script copies hooks, rules, policies, and helper scripts into `~/.codex`, and merges the hardening hooks into `~/.codex/hooks.json`.
-It now also runs a safe config merge into `~/.codex/config.toml`: missing hardening settings are added automatically, but conflicting existing user settings are left unchanged and reported in the install summary.
+`scripts/enable.sh` runs the lower-level installer, then shows the backend chooser and the exact commands for `hook_only`, `linux_wsl_netns`, and rollback.
+The installer copies hooks, rules, policies, and helper scripts into `~/.codex`, merges the hardening hooks into `~/.codex/hooks.json`, and safely merges the hardening config into `~/.codex/config.toml`: missing settings are added automatically, but conflicting existing user settings are left unchanged and reported in the install summary.
 
 ## Config Merge Notes
 
@@ -203,6 +205,7 @@ Today, the workflow is:
 - `codex-net autoexec -- ...` can now choose the mapped profile automatically for common commands such as `git fetch origin`, `npm ci`, or `curl https://github.com`
 - the wrapper validates the selected profile before launching the command
 - `codex-net backend-info` explains the available backends, their readiness, and the current effective selection
+- `codex-net use hook_only`, `codex-net use netns --prepare --sudo`, and `codex-net use default --teardown --sudo` cover the common choose / enable / rollback flow
 - `codex-net backend-set <backend>` enables a backend temporarily through an override file instead of permanently editing the user's policy
 - `codex-net backend-set <backend> --persist` writes the backend into `network_profiles.toml` when the user explicitly wants that
 - `codex-net backend-clear` removes the temporary override and returns to the configured backend from `network_profiles.toml`
@@ -253,10 +256,11 @@ Current caveat for that backend:
 Beginner-friendly backend selection flow:
 
 ```bash
-~/.codex/scripts/codex-net backend-info
-~/.codex/scripts/codex-net backend-set linux_wsl_netns --prepare --sudo
+scripts/enable.sh
+~/.codex/scripts/codex-net use hook_only
+~/.codex/scripts/codex-net use netns --prepare --sudo
 ~/.codex/scripts/codex-net autoexec -- git fetch origin
-~/.codex/scripts/codex-net backend-clear --teardown --sudo
+~/.codex/scripts/codex-net use default --teardown --sudo
 ```
 
 That sequence:

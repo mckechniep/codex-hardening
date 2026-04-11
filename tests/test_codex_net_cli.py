@@ -92,6 +92,73 @@ class CodexNetCliTests(unittest.TestCase):
             self.assertEqual(clear_result.returncode, 0, clear_result.stderr)
             self.assertIn("cleared: true", clear_result.stdout)
 
+    def test_use_alias_sets_and_clears_common_backend_names(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            env = cli_env(tmpdir)
+            set_result = subprocess.run(
+                [str(CLI), "use", "netns"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(set_result.returncode, 0, set_result.stderr)
+            self.assertIn("backend: linux_wsl_netns", set_result.stdout)
+
+            show_result = subprocess.run(
+                [str(CLI), "show-config"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(show_result.returncode, 0, show_result.stderr)
+            self.assertIn("backend_override: linux_wsl_netns", show_result.stdout)
+
+            clear_result = subprocess.run(
+                [str(CLI), "use", "default"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(clear_result.returncode, 0, clear_result.stderr)
+            self.assertIn("cleared: true", clear_result.stdout)
+
+    def test_use_default_rejects_persist_flag(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            result = subprocess.run(
+                [str(CLI), "use", "default", "--persist"],
+                cwd=ROOT,
+                env=cli_env(tmpdir),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("`codex-net use default` returns to the configured backend", result.stderr)
+
+    def test_backend_info_prints_guided_choices(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            result = subprocess.run(
+                [str(CLI), "backend-info"],
+                cwd=ROOT,
+                env=cli_env(tmpdir),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("backend_choices:", result.stdout)
+            self.assertIn("choose: ~/.codex/scripts/codex-net use hook_only", result.stdout)
+            self.assertIn("choose: ~/.codex/scripts/codex-net use netns --prepare --sudo", result.stdout)
+            self.assertIn("rollback:", result.stdout)
+
     def test_autoexec_blocks_implicit_command_on_hook_only_backend_before_execution(self) -> None:
         with TemporaryDirectory() as tmpdir:
             result = subprocess.run(

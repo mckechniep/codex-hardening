@@ -64,14 +64,13 @@ Installed Codex hardening assets into ${codex_dir}
 Backup created at ${backup_dir}
 
 Next steps:
-1. Review ${codex_dir}/config.toml and ${codex_dir}/policies/network_profiles.toml
+1. Pick a backend explicitly:
+   ${codex_dir}/scripts/codex-net backend-info
+   ${codex_dir}/scripts/codex-net use hook_only
+   ${codex_dir}/scripts/codex-net use netns --prepare --sudo
 2. Add ${codex_dir}/scripts to your PATH if you want to call codex-net directly
-3. On stock WSL, keep backend = "hook_only" for now. It is the supported default.
-4. Only try backend = "linux_wsl_nft" if \`codex-net doctor\` reports nft_socket_expr: ok. Then run:
-   ${codex_dir}/scripts/codex-net doctor
-   ${codex_dir}/scripts/codex-net apply-rules --sudo
-   ${codex_dir}/scripts/codex-net backend-status
-5. Restart Codex
+3. Review ${codex_dir}/policies/network_profiles.toml if you want to persist a backend later
+4. Restart Codex after you pick a backend
 EOF
 
 if [[ -n "${config_merge_output}" ]]; then

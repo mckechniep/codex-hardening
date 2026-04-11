@@ -8,6 +8,7 @@ from tempfile import TemporaryDirectory
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALL_SCRIPT = ROOT / "scripts" / "install.sh"
+ENABLE_SCRIPT = ROOT / "scripts" / "enable.sh"
 
 
 class InstallScriptTests(unittest.TestCase):
@@ -80,6 +81,29 @@ class InstallScriptTests(unittest.TestCase):
             self.assertEqual(len(backups), 1)
             self.assertNotIn("network_allowlist.json", result.stdout)
             self.assertIn("Config merge summary:", result.stdout)
+
+    def test_enable_script_runs_install_and_prints_backend_choices(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir)
+            env = dict(os.environ)
+            env["HOME"] = str(home)
+
+            result = subprocess.run(
+                ["bash", str(ENABLE_SCRIPT)],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((home / ".codex" / "scripts" / "codex-net").exists())
+            self.assertIn("Choose your backend:", result.stdout)
+            self.assertIn(f"{home}/.codex/scripts/codex-net use hook_only", result.stdout)
+            self.assertIn(f"{home}/.codex/scripts/codex-net use netns --prepare --sudo", result.stdout)
+            self.assertIn("Current chooser:", result.stdout)
+            self.assertIn("backend_choices:", result.stdout)
 
 
 if __name__ == "__main__":
