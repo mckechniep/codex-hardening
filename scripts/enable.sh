@@ -23,6 +23,10 @@ EOF
 
 cat <<EOF
 
+After restart, Codex will prefer:
+  ${codex_dir}/scripts/codex-net autoexec -- <command>
+for likely network shell commands, unless you already use a custom model_instructions_file.
+
 When a network command is blocked, retry it with:
   ${codex_dir}/scripts/codex-net autoexec -- <command>
 

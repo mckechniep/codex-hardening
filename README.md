@@ -46,6 +46,8 @@ AgentShield helped shape the audit mindset behind this repo: scan the agent surf
   Blocks outbound shell network usage unless it matches a configured network profile
 - `policies/network_profiles.toml`
   Profile-based network policy used by `codex-net`
+- `templates/model-instructions.md`
+  Model-facing instructions that bias Codex toward `codex-net autoexec -- ...` for network-intent shell commands
 - `scripts/enable.sh`
   Guided first-run entrypoint that installs the assets and then prints backend choices
 - `scripts/install.sh`
@@ -92,7 +94,8 @@ This repo intentionally does not include any real `history.jsonl`, `auth.json`, 
 4. Restart Codex.
 
 `scripts/enable.sh` runs the lower-level installer, then shows the backend chooser and the exact commands for `hook_only`, `linux_wsl_netns`, and rollback.
-The installer copies hooks, rules, policies, and helper scripts into `~/.codex`, merges the hardening hooks into `~/.codex/hooks.json`, and safely merges the hardening config into `~/.codex/config.toml`: missing settings are added automatically, but conflicting existing user settings are left unchanged and reported in the install summary.
+The installer copies hooks, rules, policies, helper scripts, and a model-instructions file into `~/.codex`, merges the hardening hooks into `~/.codex/hooks.json`, and safely merges the hardening config into `~/.codex/config.toml`: missing settings are added automatically, but conflicting existing user settings are left unchanged and reported in the install summary.
+When `model_instructions_file` is not already set, the installer points Codex at the hardening instruction file so the model prefers `codex-net autoexec -- ...` for likely networked shell commands before the hook fallback has to block them.
 
 ## Config Merge Notes
 
@@ -107,11 +110,16 @@ The config merge script manages these settings:
 - `[shell_environment_policy] inherit = "core"`
 - `[shell_environment_policy] include_only = [...]`
 
+The installer also manages this setting separately when it is missing:
+
+- `model_instructions_file = "~/.codex/instructions/codex-hardening-model-instructions.md"`
+
 It intentionally does not force-overwrite conflicting values in an existing `config.toml` if it contains:
 
 - trusted project entries
 - plugin settings
 - model preferences
+- a custom `model_instructions_file`
 - UI settings
 
 ## Testing
@@ -203,6 +211,7 @@ Today, the workflow is:
 - direct shell network commands are blocked when a network profile config is present
 - wrapped commands must go through `codex-net exec --profile ... -- ...`
 - `codex-net autoexec -- ...` can now choose the mapped profile automatically for common commands such as `git fetch origin`, `npm ci`, or `curl https://github.com`
+- the installed model instructions now bias Codex toward emitting `codex-net autoexec -- ...` directly for likely network-intent shell commands
 - the wrapper validates the selected profile before launching the command
 - `codex-net backend-info` explains the available backends, their readiness, and the current effective selection
 - `codex-net use hook_only`, `codex-net use netns --prepare --sudo`, and `codex-net use default --teardown --sudo` cover the common choose / enable / rollback flow

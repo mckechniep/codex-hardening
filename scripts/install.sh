@@ -8,6 +8,7 @@ backup_dir="${codex_dir}/backups/codex-hardening-$(date +%Y%m%d-%H%M%S)"
 mkdir -p \
   "${codex_dir}/backups" \
   "${codex_dir}/hooks" \
+  "${codex_dir}/instructions" \
   "${codex_dir}/policies" \
   "${codex_dir}/rules" \
   "${codex_dir}/scripts"
@@ -34,6 +35,10 @@ if [[ -d "${codex_dir}/policies" ]]; then
   cp -a "${codex_dir}/policies" "${backup_dir}/policies-preinstall" 2>/dev/null || true
 fi
 
+if [[ -d "${codex_dir}/instructions" ]]; then
+  cp -a "${codex_dir}/instructions" "${backup_dir}/instructions-preinstall" 2>/dev/null || true
+fi
+
 if [[ -d "${codex_dir}/scripts" ]]; then
   cp -a "${codex_dir}/scripts" "${backup_dir}/scripts-preinstall" 2>/dev/null || true
 fi
@@ -41,6 +46,7 @@ fi
 install -m 0644 "${repo_dir}/rules/default.rules" "${codex_dir}/rules/default.rules"
 install -m 0644 "${repo_dir}/hooks/block_destructive.py" "${codex_dir}/hooks/block_destructive.py"
 install -m 0644 "${repo_dir}/hooks/block_network_egress.py" "${codex_dir}/hooks/block_network_egress.py"
+install -m 0644 "${repo_dir}/templates/model-instructions.md" "${codex_dir}/instructions/codex-hardening-model-instructions.md"
 install -m 0644 "${repo_dir}/scripts/codex_net_policy.py" "${codex_dir}/scripts/codex_net_policy.py"
 install -m 0644 "${repo_dir}/scripts/codex_net_netns.py" "${codex_dir}/scripts/codex_net_netns.py"
 install -m 0644 "${repo_dir}/scripts/codex_net_wsl.py" "${codex_dir}/scripts/codex_net_wsl.py"
@@ -57,6 +63,20 @@ python3 "${repo_dir}/scripts/merge_hooks.py" \
   "${codex_dir}/hooks.json"
 
 config_merge_output="$("${codex_dir}/scripts/merge_config.py" "${repo_dir}/templates/config-hardening-snippet.toml" "${codex_dir}/config.toml" 2>/dev/null || true)"
+instructions_snippet="$(mktemp)"
+cat >"${instructions_snippet}" <<EOF
+model_instructions_file = "${codex_dir}/instructions/codex-hardening-model-instructions.md"
+EOF
+instructions_merge_output="$("${codex_dir}/scripts/merge_config.py" "${instructions_snippet}" "${codex_dir}/config.toml" 2>/dev/null || true)"
+rm -f "${instructions_snippet}"
+if [[ -n "${instructions_merge_output}" ]]; then
+  if [[ -n "${config_merge_output}" ]]; then
+    config_merge_output="${config_merge_output}
+${instructions_merge_output}"
+  else
+    config_merge_output="${instructions_merge_output}"
+  fi
+fi
 doctor_output="$("${codex_dir}/scripts/codex-net" doctor 2>/dev/null || true)"
 
 cat <<EOF
