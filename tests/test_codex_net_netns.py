@@ -21,6 +21,7 @@ from codex_net_netns import (
     render_exec_rules,
     run_netns_exec,
     run_netns_spike,
+    select_exec_rules_context,
 )
 from codex_net_wsl import write_backend_state
 
@@ -307,12 +308,64 @@ class NetnsExecRulesTests(unittest.TestCase):
             },
             sample_config()["profiles"]["registries"],
             {"github.com": ["140.82.112.3"]},
+            {"mode": "standalone_table", "table_name": exec_table_name(sample_config(), "abcd1234")},
         )
 
         self.assertIn(f"table inet {exec_table_name(sample_config(), 'abcd1234')}", rendered)
         self.assertIn('iifname "cnhabcd1234" ip daddr { 140.82.112.3 } tcp dport { 443 } accept', rendered)
         self.assertIn('iifname "cnhabcd1234" reject with icmpx admin-prohibited', rendered)
         self.assertIn('ip saddr 10.203.10.0/30 oifname != "cnhabcd1234" masquerade', rendered)
+
+    def test_render_exec_rules_uses_global_host_chains_when_requested(self) -> None:
+        rendered = render_exec_rules(
+            sample_config(),
+            "abcd1234",
+            "cnhabcd1234",
+            {
+                "subnet": "10.203.10.0/30",
+                "host_ip": "10.203.10.1",
+                "guest_ip": "10.203.10.2",
+                "host_cidr": "10.203.10.1/30",
+                "guest_cidr": "10.203.10.2/30",
+            },
+            sample_config()["profiles"]["registries"],
+            {"github.com": ["140.82.112.3"]},
+            {
+                "mode": "global_host_chains",
+                "filter_family": "ip",
+                "filter_table": "filter",
+                "filter_chain": "FORWARD",
+                "filter_exec_chain": "codex_exec_fwd_abcd1234",
+                "nat_family": "ip",
+                "nat_table": "nat",
+                "nat_chain": "POSTROUTING",
+                "nat_exec_chain": "codex_exec_nat_abcd1234",
+                "forward_jump_comment": "codex-net:abcd1234:forward-jump",
+                "return_accept_comment": "codex-net:abcd1234:return-accept",
+                "nat_jump_comment": "codex-net:abcd1234:nat-jump",
+            },
+        )
+
+        self.assertIn("add chain ip filter codex_exec_fwd_abcd1234", rendered)
+        self.assertIn('add rule ip filter FORWARD iifname "cnhabcd1234" jump codex_exec_fwd_abcd1234', rendered)
+        self.assertIn('add rule ip nat POSTROUTING ip saddr 10.203.10.0/30 oifname != "cnhabcd1234" jump codex_exec_nat_abcd1234', rendered)
+        self.assertIn("add rule ip nat codex_exec_nat_abcd1234 masquerade", rendered)
+
+
+class NetnsExecRulesContextTests(unittest.TestCase):
+    @mock.patch.object(codex_net_netns, "_nft_chain_exists", side_effect=[True, True])
+    def test_select_exec_rules_context_prefers_global_host_chains(self, mock_exists: mock.Mock) -> None:
+        context = select_exec_rules_context(sample_config(), "abcd1234", use_sudo=True)
+
+        self.assertEqual(context["mode"], "global_host_chains")
+        self.assertEqual(context["filter_exec_chain"], "codex_exec_fwd_abcd1234")
+
+    @mock.patch.object(codex_net_netns, "_nft_chain_exists", side_effect=[False])
+    def test_select_exec_rules_context_falls_back_to_standalone_table(self, mock_exists: mock.Mock) -> None:
+        context = select_exec_rules_context(sample_config(), "abcd1234", use_sudo=True)
+
+        self.assertEqual(context["mode"], "standalone_table")
+        self.assertEqual(context["table_name"], exec_table_name(sample_config(), "abcd1234"))
 
 
 class NetnsExecLifecycleTests(unittest.TestCase):
@@ -347,12 +400,14 @@ class NetnsExecLifecycleTests(unittest.TestCase):
     @mock.patch.object(codex_net_netns, "_namespace_token", return_value="abcd1234")
     @mock.patch.object(codex_net_netns, "netns_doctor_report", return_value={"ready": True, "checks": []})
     @mock.patch.object(codex_net_netns, "netns_backend_status_report", return_value={"ready": True, "issues": []})
+    @mock.patch.object(codex_net_netns, "select_exec_rules_context", return_value={"mode": "standalone_table", "table_name": exec_table_name(sample_config(), "abcd1234")})
     @mock.patch.object(codex_net_netns, "subprocess")
     @mock.patch.object(codex_net_netns, "os")
     def test_run_netns_exec_applies_runtime_rules_and_cleans_up(
         self,
         mock_os: mock.Mock,
         mock_subprocess: mock.Mock,
+        mock_select_context: mock.Mock,
         mock_status: mock.Mock,
         mock_doctor: mock.Mock,
         mock_token: mock.Mock,
