@@ -323,7 +323,7 @@ def render_exec_rules(
             "",
             "    chain codex_exec_postrouting {",
             "        type nat hook postrouting priority srcnat; policy accept;",
-            f'        iifname "{host_veth}" ip saddr {addresses["subnet"]} oifname != "{host_veth}" masquerade',
+            f'        ip saddr {addresses["subnet"]} oifname != "{host_veth}" masquerade',
             "    }",
             "}",
             "",

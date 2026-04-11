@@ -312,6 +312,7 @@ class NetnsExecRulesTests(unittest.TestCase):
         self.assertIn(f"table inet {exec_table_name(sample_config(), 'abcd1234')}", rendered)
         self.assertIn('iifname "cnhabcd1234" ip daddr { 140.82.112.3 } tcp dport { 443 } accept', rendered)
         self.assertIn('iifname "cnhabcd1234" reject with icmpx admin-prohibited', rendered)
+        self.assertIn('ip saddr 10.203.10.0/30 oifname != "cnhabcd1234" masquerade', rendered)
 
 
 class NetnsExecLifecycleTests(unittest.TestCase):
