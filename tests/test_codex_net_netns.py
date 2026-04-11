@@ -299,11 +299,11 @@ class NetnsExecRulesTests(unittest.TestCase):
             "abcd1234",
             "cnhabcd1234",
             {
-                "subnet": "169.254.10.0/30",
-                "host_ip": "169.254.10.1",
-                "guest_ip": "169.254.10.2",
-                "host_cidr": "169.254.10.1/30",
-                "guest_cidr": "169.254.10.2/30",
+                "subnet": "10.203.10.0/30",
+                "host_ip": "10.203.10.1",
+                "guest_ip": "10.203.10.2",
+                "host_cidr": "10.203.10.1/30",
+                "guest_cidr": "10.203.10.2/30",
             },
             sample_config()["profiles"]["registries"],
             {"github.com": ["140.82.112.3"]},
@@ -392,7 +392,7 @@ class NetnsExecLifecycleTests(unittest.TestCase):
         self.assertEqual(result, 7)
         launch_call = mock_subprocess.run.call_args_list[14].args[0]
         self.assertEqual(launch_call[:5], ["sudo", "ip", "netns", "exec", "codex-net-abcd1234"])
-        self.assertIn("CODEX_NET_HOST_GATEWAY=169.254.172.65", launch_call)
+        self.assertIn("CODEX_NET_HOST_GATEWAY=10.203.172.65", launch_call)
         nft_apply_call = mock_subprocess.run.call_args_list[13].args[0]
         self.assertEqual(nft_apply_call[:3], ["sudo", "nft", "-f"])
         nft_cleanup_call = mock_subprocess.run.call_args_list[15].args[0]

@@ -516,9 +516,11 @@ def _namespace_token() -> str:
 def address_plan(token: str) -> dict[str, str]:
     octet3 = 1 + (int(token[:2], 16) % 250)
     octet4_base = (int(token[2:4], 16) % 63) * 4
-    subnet = f"169.254.{octet3}.{octet4_base}/30"
-    host_ip = f"169.254.{octet3}.{octet4_base + 1}"
-    guest_ip = f"169.254.{octet3}.{octet4_base + 2}"
+    # Use RFC1918 space for forwarded namespace traffic. Link-local ranges like
+    # 169.254.0.0/16 are not appropriate for routed egress and can be dropped.
+    subnet = f"10.203.{octet3}.{octet4_base}/30"
+    host_ip = f"10.203.{octet3}.{octet4_base + 1}"
+    guest_ip = f"10.203.{octet3}.{octet4_base + 2}"
     return {
         "subnet": subnet,
         "host_ip": host_ip,
