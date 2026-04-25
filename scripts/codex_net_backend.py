@@ -145,7 +145,7 @@ def _normalized_wrapped_command(raw: list[str]) -> list[str]:
 
 def _run_wrapped_command(config: dict, profile: str, wrapped_command: list[str]) -> int:
     command_text = shlex.join(wrapped_command)
-    validate_command_for_profile(command_text, profile, config)
+    validate_command_for_profile(command_text, profile, config, enforce_require_approval=True)
 
     backend = config["backend"]
     if backend not in SUPPORTED_BACKENDS:

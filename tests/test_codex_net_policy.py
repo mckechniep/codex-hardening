@@ -64,13 +64,19 @@ class SelectProfileForCommandTests(unittest.TestCase):
     def test_covers_additional_package_manager_and_git_flows(self) -> None:
         fixtures = {
             "uv sync": "registries",
+            "uv add openai": "registries",
             "pip download openai": "registries",
             "npm ci": "registries",
+            "npm update": "registries",
             "pnpm install": "registries",
+            "pnpm update": "registries",
             "yarn install": "registries",
+            "yarn add react": "registries",
             "go get example.com/mod": "registries",
             "cargo install ripgrep": "registries",
+            "cargo update": "registries",
             "git ls-remote origin": "git_readonly",
+            "git pull origin main": "git_readonly",
         }
         for command, expected in fixtures.items():
             with self.subTest(command=command):
@@ -127,6 +133,19 @@ class ValidateCommandForProfileTests(unittest.TestCase):
     def test_blocks_local_port_outside_profile(self) -> None:
         with self.assertRaisesRegex(PolicyError, "does not allow localhost TCP port 9999"):
             validate_command_for_profile("curl http://localhost:9999", "dev_local", CONFIG)
+
+    def test_blocks_approval_required_profile_when_enforced(self) -> None:
+        with self.assertRaisesRegex(PolicyError, "require_approval = true"):
+            validate_command_for_profile(
+                "curl https://github.com",
+                "registries",
+                CONFIG,
+                enforce_require_approval=True,
+            )
+
+    def test_relaxed_network_allows_any_domain_on_common_ports(self) -> None:
+        validate_command_for_profile("curl https://example.com", "relaxed_network", CONFIG)
+        validate_command_for_profile("ssh git@github.com", "relaxed_network", CONFIG)
 
 
 class BackendSelectionTests(unittest.TestCase):

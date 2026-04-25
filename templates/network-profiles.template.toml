@@ -68,6 +68,14 @@ allowed_tcp_ports = [80, 3000, 4173, 5000, 8000, 8080]
 allowed_udp_ports = []
 require_approval = false
 
+[profiles.relaxed_network]
+description = "Relaxed network access for day-to-day personal use. Allows any remote domain on common ports."
+allow_localhost = true
+allowed_domains = ["*"]
+allowed_tcp_ports = [22, 80, 443, 3000, 4173, 5000, 8000, 8080, 8443]
+allowed_udp_ports = [53]
+require_approval = false
+
 [profiles.custom]
 description = "User-managed profile entries."
 allow_localhost = true
@@ -85,8 +93,37 @@ rsync = "git_readonly"
 
 [command_profiles]
 "cargo add" = "registries"
+"cargo install" = "registries"
+"cargo update" = "registries"
 "git clone" = "git_readonly"
 "git fetch" = "git_readonly"
+"git ls-remote" = "git_readonly"
+"git pull" = "git_readonly"
+"go get" = "registries"
+"go install" = "registries"
+"go mod" = "registries"
+"npm add" = "registries"
+"npm ci" = "registries"
+"npm i" = "registries"
 "npm install" = "registries"
+"npm update" = "registries"
+"npm upgrade" = "registries"
+"pip download" = "registries"
 "pip install" = "registries"
+"pip wheel" = "registries"
+"pnpm add" = "registries"
+"pnpm install" = "registries"
+"pnpm update" = "registries"
+"pnpm upgrade" = "registries"
+"uv add" = "registries"
 "uv pip install" = "registries"
+"uv pip sync" = "registries"
+"uv sync" = "registries"
+"uv tool install" = "registries"
+"yarn add" = "registries"
+"yarn install" = "registries"
+"yarn up" = "registries"
+"yarn upgrade" = "registries"
+"brew install" = "registries"
+"brew update" = "registries"
+"brew upgrade" = "registries"

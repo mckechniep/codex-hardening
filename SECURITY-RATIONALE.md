@@ -138,7 +138,7 @@ It allows:
 
 - localhost and loopback targets when the selected profile allows them
 - explicit remote targets that fit the selected profile
-- wrapped commands that use `codex-net exec --profile ... -- ...`
+- wrapped commands that use `codex-net exec --profile ... -- ...` when the selected profile does not require approval
 
 It blocks:
 
@@ -146,6 +146,7 @@ It blocks:
 - implicit network commands when the backend cannot verify the actual destination
 - ambiguous raw socket use
 - dynamic destinations such as `$URL` that cannot be safely verified from the literal command string
+- wrapped commands using profiles marked `require_approval = true`, because Codex `PreToolUse` hooks cannot currently surface a real native approval prompt for this policy decision
 
 On stock WSL today, this hook-driven path is the supported network control model. That means implicit network commands may still require a human decision even when the profile model exists, because the stronger nft-backed backend depends on kernel support that is not present on the default Microsoft WSL kernel validated for this repo.
 

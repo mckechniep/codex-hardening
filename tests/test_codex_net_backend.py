@@ -17,7 +17,7 @@ def sample_config() -> dict:
         "default_profile": "offline",
         "profiles": {
             "offline": {"description": "", "allow_localhost": True, "allowed_domains": [], "allowed_tcp_ports": [], "allowed_udp_ports": [], "require_approval": False},
-            "registries": {"description": "", "allow_localhost": True, "allowed_domains": ["github.com"], "allowed_tcp_ports": [443], "allowed_udp_ports": [], "require_approval": True},
+            "registries": {"description": "", "allow_localhost": True, "allowed_domains": ["github.com"], "allowed_tcp_ports": [443], "allowed_udp_ports": [], "require_approval": False},
         },
     }
 
@@ -37,7 +37,12 @@ class CodexNetBackendExecTests(unittest.TestCase):
         result = codex_net_backend.cmd_exec(args)
 
         self.assertEqual(result, 23)
-        mock_validate.assert_called_once_with("npm ci", "registries", sample_config())
+        mock_validate.assert_called_once_with(
+            "npm ci",
+            "registries",
+            sample_config(),
+            enforce_require_approval=True,
+        )
         mock_run_netns_exec.assert_called_once_with("registries", ["npm", "ci"], sample_config())
 
 

@@ -51,6 +51,7 @@ install -m 0644 "${repo_dir}/scripts/codex_net_policy.py" "${codex_dir}/scripts/
 install -m 0644 "${repo_dir}/scripts/codex_net_netns.py" "${codex_dir}/scripts/codex_net_netns.py"
 install -m 0644 "${repo_dir}/scripts/codex_net_wsl.py" "${codex_dir}/scripts/codex_net_wsl.py"
 install -m 0755 "${repo_dir}/scripts/merge_config.py" "${codex_dir}/scripts/merge_config.py"
+install -m 0755 "${repo_dir}/scripts/merge_developer_instructions.py" "${codex_dir}/scripts/merge_developer_instructions.py"
 install -m 0755 "${repo_dir}/scripts/codex_net_backend.py" "${codex_dir}/scripts/codex_net_backend.py"
 install -m 0755 "${repo_dir}/scripts/codex-net" "${codex_dir}/scripts/codex-net"
 
@@ -63,12 +64,7 @@ python3 "${repo_dir}/scripts/merge_hooks.py" \
   "${codex_dir}/hooks.json"
 
 config_merge_output="$("${codex_dir}/scripts/merge_config.py" "${repo_dir}/templates/config-hardening-snippet.toml" "${codex_dir}/config.toml" 2>/dev/null || true)"
-instructions_snippet="$(mktemp)"
-cat >"${instructions_snippet}" <<EOF
-model_instructions_file = "${codex_dir}/instructions/codex-hardening-model-instructions.md"
-EOF
-instructions_merge_output="$("${codex_dir}/scripts/merge_config.py" "${instructions_snippet}" "${codex_dir}/config.toml" 2>/dev/null || true)"
-rm -f "${instructions_snippet}"
+instructions_merge_output="$("${codex_dir}/scripts/merge_developer_instructions.py" "${repo_dir}/templates/model-instructions.md" "${codex_dir}/config.toml" 2>/dev/null || true)"
 if [[ -n "${instructions_merge_output}" ]]; then
   if [[ -n "${config_merge_output}" ]]; then
     config_merge_output="${config_merge_output}

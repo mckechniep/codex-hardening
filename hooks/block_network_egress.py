@@ -75,7 +75,12 @@ def profile_mode(command: str, config: dict) -> None:
                 if not nested_tokens:
                     deny("`codex-net exec` requires a wrapped command after `--`.")
                 try:
-                    validate_command_for_profile(shlex.join(nested_tokens), profile_name, config)
+                    validate_command_for_profile(
+                        shlex.join(nested_tokens),
+                        profile_name,
+                        config,
+                        enforce_require_approval=True,
+                    )
                 except PolicyError as exc:
                     deny(str(exc))
                 continue

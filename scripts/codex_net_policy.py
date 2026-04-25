@@ -91,6 +91,66 @@ DEFAULT_TOOL_PROFILES = {
     "scp": "git_readonly",
     "rsync": "git_readonly",
 }
+IMPLICIT_SUBCOMMAND_PROFILES = {
+    "brew": {
+        "install": "registries",
+        "update": "registries",
+        "upgrade": "registries",
+    },
+    "cargo": {
+        "add": "registries",
+        "install": "registries",
+        "update": "registries",
+    },
+    "git": {
+        "clone": "git_readonly",
+        "fetch": "git_readonly",
+        "ls-remote": "git_readonly",
+        "pull": "git_readonly",
+        "submodule": "git_readonly",
+    },
+    "go": {
+        "get": "registries",
+        "install": "registries",
+        "mod": "registries",
+    },
+    "npm": {
+        "add": "registries",
+        "ci": "registries",
+        "i": "registries",
+        "install": "registries",
+        "update": "registries",
+        "upgrade": "registries",
+    },
+    "pip": {
+        "download": "registries",
+        "install": "registries",
+        "wheel": "registries",
+    },
+    "pip3": {
+        "download": "registries",
+        "install": "registries",
+        "wheel": "registries",
+    },
+    "pnpm": {
+        "add": "registries",
+        "install": "registries",
+        "update": "registries",
+        "upgrade": "registries",
+    },
+    "uv": {
+        "add": "registries",
+        "pip": "registries",
+        "sync": "registries",
+        "tool": "registries",
+    },
+    "yarn": {
+        "add": "registries",
+        "install": "registries",
+        "up": "registries",
+        "upgrade": "registries",
+    },
+}
 SCHEME_DEFAULT_PORTS = {"git": 9418, "http": 80, "https": 443, "rsync": 873, "ssh": 22}
 
 
@@ -650,6 +710,8 @@ def host_is_allowed(host: str, allowed_domains: list[str] | set[str]) -> bool:
         return False
     if normalized in LOCAL_HOSTS:
         return True
+    if "*" in allowed_domains:
+        return True
     return any(
         normalized == domain or normalized.endswith(f".{domain}")
         for domain in allowed_domains
@@ -700,6 +762,12 @@ def mapped_profile_for_command(config: dict, command: str) -> str | None:
             if not resolved:
                 continue
             name, _ = resolved
+            args = resolved[1]
+            subcommands = IMPLICIT_SUBCOMMAND_PROFILES.get(name, {})
+            if args:
+                profile = subcommands.get(args[0])
+                if profile in config["profiles"]:
+                    return profile
             profile = config["tool_profiles"].get(name)
             if profile in config["profiles"]:
                 return profile
@@ -774,7 +842,13 @@ def _validate_request_against_profile(request: NetworkRequest, profile_name: str
         )
 
 
-def validate_command_for_profile(command: str, profile_name: str, config: dict) -> None:
+def validate_command_for_profile(
+    command: str,
+    profile_name: str,
+    config: dict,
+    *,
+    enforce_require_approval: bool = False,
+) -> None:
     if profile_name not in config["profiles"]:
         raise PolicyError(f"Unknown network profile `{profile_name}`.")
 
@@ -789,3 +863,11 @@ def validate_command_for_profile(command: str, profile_name: str, config: dict) 
 
     for request in requests:
         _validate_request_against_profile(request, profile_name, config)
+
+    if enforce_require_approval and config["profiles"][profile_name]["require_approval"]:
+        raise PolicyError(
+            f"Profile `{profile_name}` is marked require_approval = true. "
+            "This hook/wrapper path cannot produce a native Codex approval prompt for profile policy yet, "
+            "so Codex is not allowed to run it automatically. Run the command yourself after review, "
+            "or change the profile policy to require_approval = false for unattended use."
+        )

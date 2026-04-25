@@ -35,6 +35,7 @@ class CodexNetCliTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("offline (default): No remote network access.", result.stdout)
             self.assertIn("registries: Common package registries and source hosts.", result.stdout)
+            self.assertIn("relaxed_network: Relaxed network access for day-to-day personal use.", result.stdout)
 
     def test_show_config_prints_loaded_policy_path(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -263,6 +264,20 @@ class CodexNetCliTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 2)
             self.assertIn("hook_only backend can only validate commands with explicit network targets", result.stderr)
+
+    def test_exec_blocks_approval_required_profile_before_execution(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            result = subprocess.run(
+                [str(CLI), "exec", "--profile", "registries", "--", "curl", "https://github.com"],
+                cwd=ROOT,
+                env=cli_env(tmpdir),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("require_approval = true", result.stderr)
 
 
 if __name__ == "__main__":

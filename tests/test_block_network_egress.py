@@ -47,17 +47,32 @@ class BlockNetworkEgressTests(unittest.TestCase):
         self.assertIn("destination `$URL` is dynamic and cannot be verified", result.stderr)
 
     def test_wrapped_allowed_command_passes_validation(self) -> None:
-        result = run_hook(f"{WRAPPER} exec --profile registries -- curl https://github.com")
+        result = run_hook(f"{WRAPPER} exec --profile dev_local -- curl http://localhost:8080")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stderr, "")
+
+    def test_wrapped_approval_required_profile_is_rejected(self) -> None:
+        result = run_hook(f"{WRAPPER} exec --profile registries -- curl https://github.com")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("require_approval = true", result.stderr)
 
     def test_implicit_remote_command_is_blocked_in_hook_only_mode(self) -> None:
         result = run_hook("git fetch origin")
         self.assertEqual(result.returncode, 2)
         self.assertIn("hook_only backend cannot verify its actual destination", result.stderr)
 
+    def test_git_pull_is_treated_as_implicit_network_intent(self) -> None:
+        result = run_hook("git pull origin main")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("implies network access and maps to profile `git_readonly`", result.stderr)
+
     def test_package_manager_command_is_treated_as_implicit_network_intent(self) -> None:
         result = run_hook("npm ci")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("implies network access and maps to profile `registries`", result.stderr)
+
+    def test_package_manager_update_is_treated_as_implicit_network_intent(self) -> None:
+        result = run_hook("npm update")
         self.assertEqual(result.returncode, 2)
         self.assertIn("implies network access and maps to profile `registries`", result.stderr)
 

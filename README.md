@@ -26,6 +26,119 @@ It is designed for Codex CLI configuration under `~/.codex/`, with Codex-native 
 
 It is not a Claude config repo and does not target `~/.claude/`.
 
+## Beginner-Friendly Mental Model
+
+This repo is not a Codex plugin. It is a local Codex hardening bundle.
+
+It installs a small set of files under `~/.codex/`:
+
+- Codex config defaults
+- Codex `PreToolUse` hooks
+- Codex execpolicy rules
+- a `codex-net` helper script
+- network profile policy
+
+The goal is to make Codex behave like this:
+
+1. Ordinary coding commands still work.
+2. Obviously destructive shell commands are blocked before they run.
+3. Network use must be explicit instead of silent.
+4. Network commands are grouped into named profiles such as `dev_local`, `registries`, `git_readonly`, or `relaxed_network`.
+5. Stronger WSL network isolation can be enabled later, but the default path stays lightweight.
+
+## How A Command Flows
+
+When Codex tries to run a shell command, the flow is:
+
+```text
+Codex proposes a shell command
+  -> Codex sandbox applies filesystem/network limits
+  -> PreToolUse hooks inspect the command text
+  -> destructive commands are blocked
+  -> direct network commands are blocked or validated
+  -> allowed commands run
+```
+
+The sandbox and hooks solve different problems.
+
+The sandbox is Codex's built-in guardrail around commands Codex runs. With this repo's default config, Codex uses `workspace-write` and shell network access is disabled by default. That is not a virtual machine, but it does limit Codex-run commands from writing freely across the host or using ambient network access.
+
+The hooks are extra checks before a shell command runs. They look for things like `git reset --hard`, `rm -rf /`, `curl https://...`, `npm install`, or `git pull origin main`.
+
+## What Is A Wrapped Command?
+
+A wrapped command is a normal command run through `codex-net`.
+
+Direct command:
+
+```bash
+curl https://github.com
+```
+
+Wrapped command:
+
+```bash
+~/.codex/scripts/codex-net exec --profile registries -- curl https://github.com
+```
+
+The wrapper gives the policy layer an explicit statement:
+
+```text
+profile: registries
+real command: curl https://github.com
+```
+
+That lets `codex-net` check the selected profile before running the real command. In the default `hook_only` backend, this is mostly command validation and intent tracking. In stronger backends like `linux_wsl_netns`, the wrapper is also where the per-command network namespace and firewall rules are attached.
+
+`autoexec` can choose a profile for common commands:
+
+```bash
+~/.codex/scripts/codex-net autoexec -- npm update
+~/.codex/scripts/codex-net autoexec -- git pull origin main
+```
+
+## Network Profiles
+
+Profiles live in `~/.codex/policies/network_profiles.toml` after install. The repo copy is [policies/network_profiles.toml](./policies/network_profiles.toml).
+
+Profiles do not inherit from each other. If two profiles allow the same host, that is duplication, not inheritance.
+
+Built-in profiles:
+
+- `offline`: no remote network access.
+- `dev_local`: localhost development servers such as ports `3000`, `8000`, and `8080`.
+- `registries`: common package/source hosts such as GitHub, PyPI, npm, and crates.io over HTTPS.
+- `git_readonly`: GitHub over SSH/HTTPS for Git remote operations.
+- `relaxed_network`: intentionally broad personal-use profile that allows any remote domain on common ports.
+- `custom`: empty user-managed profile.
+
+The relaxed profile exists for convenience while you are tuning the setup:
+
+```bash
+~/.codex/scripts/codex-net exec --profile relaxed_network -- curl https://example.com
+~/.codex/scripts/codex-net exec --profile relaxed_network -- ssh git@github.com
+```
+
+It is intentionally less restrictive than `registries` and `git_readonly`. Keep it if your priority is smooth day-to-day work; remove it or set `require_approval = true` if your priority is tighter network control.
+
+## Approval Required Profiles
+
+Profiles can contain:
+
+```toml
+require_approval = true
+```
+
+Today, this repo treats that as "do not let Codex run this automatically." Codex hooks can reliably allow or block, but the current `PreToolUse` hook path cannot reliably show a native approval prompt for this custom profile decision. So the safe behavior is to fail closed.
+
+If you want Codex to run a profile unattended through `codex-net`, set:
+
+```toml
+require_approval = false
+```
+
+If you want human review first, leave `require_approval = true` and run the command manually after checking it.
+
 ## Attribution
 
 Credit to [AgentShield](https://github.com/affaan-m/agentshield), an AI agent security scanner focused on Claude-oriented setups.
@@ -47,7 +160,7 @@ AgentShield helped shape the audit mindset behind this repo: scan the agent surf
 - `policies/network_profiles.toml`
   Profile-based network policy used by `codex-net`
 - `templates/model-instructions.md`
-  Model-facing instructions that bias Codex toward `codex-net autoexec -- ...` for network-intent shell commands
+  Developer-instruction snippet that biases Codex toward `codex-net autoexec -- ...` for network-intent shell commands
 - `scripts/enable.sh`
   Guided first-run entrypoint that installs the assets and then prints backend choices
 - `scripts/install.sh`
@@ -94,8 +207,8 @@ This repo intentionally does not include any real `history.jsonl`, `auth.json`, 
 4. Restart Codex.
 
 `scripts/enable.sh` runs the lower-level installer, then shows the backend chooser and the exact commands for `hook_only`, `linux_wsl_netns`, and rollback.
-The installer copies hooks, rules, policies, helper scripts, and a model-instructions file into `~/.codex`, merges the hardening hooks into `~/.codex/hooks.json`, and safely merges the hardening config into `~/.codex/config.toml`: missing settings are added automatically, but conflicting existing user settings are left unchanged and reported in the install summary.
-When `model_instructions_file` is not already set, the installer points Codex at the hardening instruction file so the model prefers `codex-net autoexec -- ...` for likely networked shell commands before the hook fallback has to block them.
+The installer copies hooks, rules, policies, helper scripts, and a developer-instruction snippet into `~/.codex`, merges the hardening hooks into `~/.codex/hooks.json`, and safely merges the hardening config into `~/.codex/config.toml`: missing settings are added automatically, but conflicting existing user settings are left unchanged and reported in the install summary.
+The installer adds the hardening network guidance to `developer_instructions` with a managed block so Codex still keeps its built-in instruction file while preferring `codex-net autoexec -- ...` for likely networked shell commands before the hook fallback has to block them.
 
 ## Config Merge Notes
 
@@ -110,16 +223,16 @@ The config merge script manages these settings:
 - `[shell_environment_policy] inherit = "core"`
 - `[shell_environment_policy] include_only = [...]`
 
-The installer also manages this setting separately when it is missing:
+The installer also appends a managed block to this additive setting:
 
-- `model_instructions_file = "~/.codex/instructions/codex-hardening-model-instructions.md"`
+- `developer_instructions`
 
 It intentionally does not force-overwrite conflicting values in an existing `config.toml` if it contains:
 
 - trusted project entries
 - plugin settings
 - model preferences
-- a custom `model_instructions_file`
+- existing custom `developer_instructions`
 - UI settings
 
 ## Testing
@@ -150,6 +263,10 @@ EOF
 
 python3 ~/.codex/hooks/block_network_egress.py <<'EOF'
 {"tool_input":{"command":"~/.codex/scripts/codex-net exec --profile registries -- curl https://github.com"}}
+EOF
+
+python3 ~/.codex/hooks/block_network_egress.py <<'EOF'
+{"tool_input":{"command":"~/.codex/scripts/codex-net exec --profile dev_local -- curl http://localhost:8080"}}
 EOF
 
 ~/.codex/scripts/codex-net doctor
@@ -210,9 +327,10 @@ Today, the workflow is:
 
 - direct shell network commands are blocked when a network profile config is present
 - wrapped commands must go through `codex-net exec --profile ... -- ...`
-- `codex-net autoexec -- ...` can now choose the mapped profile automatically for common commands such as `git fetch origin`, `npm ci`, or `curl https://github.com`
-- the installed model instructions now bias Codex toward emitting `codex-net autoexec -- ...` directly for likely network-intent shell commands
+- `codex-net autoexec -- ...` can now choose the mapped profile automatically for common commands such as `git fetch origin`, `git pull origin main`, `npm ci`, `npm update`, or `curl https://github.com`
+- the installed developer instructions now bias Codex toward emitting `codex-net autoexec -- ...` directly for likely network-intent shell commands
 - the wrapper validates the selected profile before launching the command
+- profiles marked `require_approval = true` are denied in the hook/wrapper execution path because Codex `PreToolUse` hooks cannot currently produce a native approval prompt; run those commands manually after review, or set `require_approval = false` for profiles you intentionally allow unattended
 - `codex-net backend-info` explains the available backends, their readiness, and the current effective selection
 - `codex-net use hook_only`, `codex-net use netns --prepare --sudo`, and `codex-net use default --teardown --sudo` cover the common choose / enable / rollback flow
 - `codex-net backend-set <backend>` enables a backend temporarily through an override file instead of permanently editing the user's policy
