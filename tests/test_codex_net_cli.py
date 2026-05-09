@@ -11,9 +11,9 @@ CLI = ROOT / "scripts" / "codex-net"
 POLICY = ROOT / "policies" / "network_profiles.toml"
 
 
-def cli_env(tmpdir: str) -> dict[str, str]:
+def cli_env(tmpdir: str, policy_path: Path | None = None) -> dict[str, str]:
     env = dict(os.environ)
-    env["CODEX_NET_POLICY_PATH"] = str(POLICY)
+    env["CODEX_NET_POLICY_PATH"] = str(policy_path or POLICY)
     env["CODEX_NET_STATE_PATH"] = str(Path(tmpdir) / "backend_state.json")
     env["CODEX_NET_COMPILED_DIR"] = str(Path(tmpdir) / "compiled")
     env["CODEX_NET_BACKEND_OVERRIDE_PATH"] = str(Path(tmpdir) / "backend_override.json")
@@ -34,6 +34,7 @@ class CodexNetCliTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("offline (default): No remote network access.", result.stdout)
+            self.assertIn("approved: User-approved unattended destinations and commands.", result.stdout)
             self.assertIn("registries: Common package registries and source hosts.", result.stdout)
             self.assertIn("relaxed_network: Relaxed network access for day-to-day personal use.", result.stdout)
 
@@ -143,6 +144,23 @@ class CodexNetCliTests(unittest.TestCase):
             self.assertEqual(result.returncode, 2)
             self.assertIn("`codex-net use default` returns to the configured backend", result.stderr)
 
+    def test_make_default_persists_backend_selection(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            policy_path = Path(tmpdir) / "network_profiles.toml"
+            policy_path.write_text(POLICY.read_text())
+            result = subprocess.run(
+                [str(CLI), "make-default", "hook_only"],
+                cwd=ROOT,
+                env=cli_env(tmpdir, policy_path),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("selection: persistent", result.stdout)
+            self.assertIn('backend = "hook_only"', policy_path.read_text())
+
     def test_backend_info_prints_guided_choices(self) -> None:
         with TemporaryDirectory() as tmpdir:
             result = subprocess.run(
@@ -159,6 +177,70 @@ class CodexNetCliTests(unittest.TestCase):
             self.assertIn("choose: ~/.codex/scripts/codex-net use hook_only", result.stdout)
             self.assertIn("choose: ~/.codex/scripts/codex-net use netns --prepare --sudo", result.stdout)
             self.assertIn("rollback:", result.stdout)
+
+    def test_setup_print_only_prints_tailored_menu_without_changing_backend(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            env = cli_env(tmpdir)
+            result = subprocess.run(
+                [str(CLI), "setup", "--print-only"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("Codex hardening backend setup", result.stdout)
+            self.assertIn("current_backend: hook_only", result.stdout)
+            self.assertIn("Choose a mode:", result.stdout)
+            self.assertIn("Recommended for this host", result.stdout)
+            self.assertIn("Light hook-only mode", result.stdout)
+            self.assertIn("Strict WSL namespace mode", result.stdout)
+            self.assertIn("No changes made.", result.stdout)
+            self.assertFalse((Path(tmpdir) / "backend_override.json").exists())
+
+    def test_approve_adds_domain_and_command_mapping_with_inferred_port(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            policy_path = Path(tmpdir) / "network_profiles.toml"
+            policy_path.write_text(POLICY.read_text())
+            result = subprocess.run(
+                [str(CLI), "approve", "https://api.mycompany.com/v1", "--command", "mycli sync"],
+                cwd=ROOT,
+                env=cli_env(tmpdir, policy_path),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("profile: approved", result.stdout)
+            self.assertIn("domain: api.mycompany.com", result.stdout)
+            self.assertIn("tcp_ports: 443", result.stdout)
+            self.assertIn("command_profile: mycli sync -> approved", result.stdout)
+            policy_text = policy_path.read_text()
+            self.assertIn('allowed_domains = ["api.mycompany.com"]', policy_text)
+            self.assertIn("allowed_tcp_ports = [443]", policy_text)
+            self.assertIn("require_approval = false", policy_text)
+            self.assertIn('"mycli sync" = "approved"', policy_text)
+
+    def test_approve_infers_ssh_port_for_git_ssh_target(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            policy_path = Path(tmpdir) / "network_profiles.toml"
+            policy_path.write_text(POLICY.read_text())
+            result = subprocess.run(
+                [str(CLI), "approve", "git@github.com:example/repo.git", "--command", "git ls-remote"],
+                cwd=ROOT,
+                env=cli_env(tmpdir, policy_path),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("domain: github.com", result.stdout)
+            self.assertIn("tcp_ports: 22", result.stdout)
+            self.assertIn('allowed_tcp_ports = [22, 443]', policy_path.read_text())
 
     def test_autoexec_blocks_implicit_command_on_hook_only_backend_before_execution(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -264,6 +346,20 @@ class CodexNetCliTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 2)
             self.assertIn("hook_only backend can only validate commands with explicit network targets", result.stderr)
+
+    def test_exec_blocks_uninspected_profile_command_in_hook_only_backend(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            result = subprocess.run(
+                [str(CLI), "exec", "--profile", "relaxed_network", "--", "python3", "-c", "pass"],
+                cwd=ROOT,
+                env=cli_env(tmpdir),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("hook_only backend cannot inspect this command", result.stderr)
 
     def test_exec_blocks_approval_required_profile_before_execution(self) -> None:
         with TemporaryDirectory() as tmpdir:

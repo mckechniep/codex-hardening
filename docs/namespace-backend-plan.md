@@ -10,6 +10,27 @@ Working backend name:
 
 - `linux_wsl_netns`
 
+## Implementation Status
+
+The first-pass execution path is implemented.
+
+Today, `linux_wsl_netns` can:
+
+- install base runtime nftables scaffolding with `codex-net apply-rules --sudo`
+- report backend state with `codex-net backend-status`
+- run `codex-net exec --profile ... -- ...` in a transient namespace
+- create a veth pair and default route for each wrapped command
+- apply per-execution nftables rules keyed to the namespace interface and subnet
+- run the wrapped command as the original user
+- clean up per-execution namespace, veth, nftables, and state artifacts on normal exit
+
+Still planned:
+
+- local policy DNS stub
+- garbage collection for orphaned runtime artifacts
+- friendlier local-dev exposure helpers
+- broader real-host validation
+
 ## Success Criteria
 
 This backend is worth shipping only if it can do all of the following on a normal WSL 2 setup:
@@ -30,7 +51,7 @@ That namespace:
 - starts with no external network access
 - gets a dedicated veth pair to the host namespace
 - uses a namespace-local default route through the host side of that veth
-- uses a local policy DNS stub instead of direct external DNS
+- currently uses generated `hosts` files for explicit domain profiles and host resolver config for wildcard profiles; the target design is still a local policy DNS stub
 - is governed by host-side nftables rules keyed to namespace interface and subnet, not cgroup socket matching
 
 This avoids the kernel feature that blocked `linux_wsl_nft` on stock WSL.
@@ -110,6 +131,13 @@ For each wrapped execution:
 ### 5. DNS Wiring
 
 The namespace must not talk to arbitrary external resolvers.
+
+Current first pass:
+
+- explicit domain profiles get a namespace-local `hosts` file and a dead-end `resolv.conf`
+- wildcard profiles such as `relaxed_network` use the host resolver config and allow any remote address on the profile's approved ports
+
+Target design:
 
 Instead:
 
@@ -217,6 +245,8 @@ If the DNS stub is unhealthy:
 
 Do not silently fall back to external resolvers.
 
+Current caveat: wildcard profiles intentionally use the host resolver config because their policy already allows any remote address on selected ports. Explicit domain profiles still fail closed when their allowed domains cannot be resolved before launch.
+
 ## Local-Dev Allowances
 
 Local development needs explicit handling because `127.0.0.1` inside the namespace is not the same as host loopback.
@@ -306,23 +336,32 @@ Add or extend:
 - prove namespace creation, veth setup, and cleanup on stock WSL
 - prove wrapped command launch inside a namespace as the original user
 
+Status: implemented.
+
 ### Phase 5B: Base Runtime
 
 - add persistent base nft table and locking
 - add execution state tracking
 - add rollback-safe helper functions
 
-### Phase 5C: DNS Control
+Status: implemented.
+
+### Phase 5C: First-Pass Profile Enforcement
+
+- translate profiles into runtime destination rules
+- enforce ports and explicit-domain destinations on the namespace subnet
+- support wildcard profiles on approved ports
+- validate real allow and deny cases for implicit commands
+
+Status: implemented as a first pass with generated `hosts` files and host resolver config for wildcard profiles.
+
+### Phase 5D: DNS Control
 
 - add the local policy DNS stub
-- wire namespace `resolv.conf` to the stub
+- wire namespace `resolv.conf` to the stub for explicit domain profiles
 - deny direct external DNS from wrapped namespaces
 
-### Phase 5D: Profile Enforcement
-
-- translate profiles into runtime destination sets
-- enforce ports and destinations on the namespace subnet
-- validate real allow and deny cases for implicit commands
+Status: planned.
 
 ### Phase 5E: Local Dev
 

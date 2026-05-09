@@ -242,6 +242,10 @@ def _resolve_domain(domain: str) -> dict[str, list[str] | str]:
     }
 
 
+def _profile_allows_any_remote(profile: dict) -> bool:
+    return "*" in {str(domain).strip().lower() for domain in profile.get("allowed_domains", [])}
+
+
 def _profile_set_name(profile_name: str, suffix: str) -> str:
     cleaned = "".join(ch if ch.isalnum() else "_" for ch in profile_name.lower()).strip("_")
     cleaned = cleaned or "profile"
@@ -302,7 +306,10 @@ def compile_profiles(config: dict, output_dir: Path | None = None) -> dict:
         resolutions = {}
         ipv4: set[str] = set()
         ipv6: set[str] = set()
+        allow_any_remote = _profile_allows_any_remote(profile)
         for domain in profile["allowed_domains"]:
+            if str(domain).strip() == "*":
+                continue
             result = _resolve_domain(domain)
             resolutions[domain] = result
             if result["ipv4"] or result["ipv6"]:
@@ -319,6 +326,7 @@ def compile_profiles(config: dict, output_dir: Path | None = None) -> dict:
             "allowed_tcp_ports": profile["allowed_tcp_ports"],
             "allowed_udp_ports": profile["allowed_udp_ports"],
             "require_approval": profile["require_approval"],
+            "allow_any_remote": allow_any_remote,
             "resolved_ipv4": sorted(ipv4),
             "resolved_ipv6": sorted(ipv6),
             "resolutions": resolutions,
@@ -617,6 +625,11 @@ def render_nftables_rules(manifest: dict) -> str:
                 f"        {cgroup_match} ip6 daddr @{profile['set_names']['ipv6']} tcp dport @"
                 f"{profile['set_names']['tcp_ports']} accept"
             )
+        if profile.get("allow_any_remote") and profile["allowed_tcp_ports"]:
+            lines.append(
+                f'        {cgroup_match} oifname != "lo" tcp dport @'
+                f"{profile['set_names']['tcp_ports']} accept"
+            )
         if profile["allowed_udp_ports"]:
             lines.append(
                 f"        {cgroup_match} ip daddr @{profile['set_names']['ipv4']} udp dport @"
@@ -624,6 +637,11 @@ def render_nftables_rules(manifest: dict) -> str:
             )
             lines.append(
                 f"        {cgroup_match} ip6 daddr @{profile['set_names']['ipv6']} udp dport @"
+                f"{profile['set_names']['udp_ports']} accept"
+            )
+        if profile.get("allow_any_remote") and profile["allowed_udp_ports"]:
+            lines.append(
+                f'        {cgroup_match} oifname != "lo" udp dport @'
                 f"{profile['set_names']['udp_ports']} accept"
             )
 

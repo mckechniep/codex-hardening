@@ -7,8 +7,10 @@ import shlex
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 from codex_net_policy import (
+    LOCAL_HOSTS,
     PolicyError,
     SUPPORTED_BACKENDS,
     backend_override_path,
@@ -57,6 +59,15 @@ def parser() -> argparse.ArgumentParser:
     subcommands.add_parser("list-profiles", help="List the available network profiles.")
     subcommands.add_parser("show-config", help="Show the loaded network profile config path and backend.")
     subcommands.add_parser("backend-info", help="Explain available backends and show the current effective selection.")
+    setup_parser = subcommands.add_parser(
+        "setup",
+        help="Interactive backend setup menu tailored to this host.",
+    )
+    setup_parser.add_argument(
+        "--print-only",
+        action="store_true",
+        help="Print the tailored menu without prompting or changing backend selection.",
+    )
     backend_set_parser = subcommands.add_parser(
         "backend-set",
         help="Select a backend temporarily via override, or persist it into the policy file.",
@@ -95,6 +106,49 @@ def parser() -> argparse.ArgumentParser:
         "--teardown",
         action="store_true",
         help="When choosing `default`, tear down the active backend before clearing the override.",
+    )
+    default_parser = subcommands.add_parser(
+        "make-default",
+        aliases=["default"],
+        help="Make a backend the configured default in network_profiles.toml.",
+    )
+    default_parser.add_argument("backend_choice", help="One of: hook_only, netns, nft.")
+    default_parser.add_argument(
+        "--prepare",
+        action="store_true",
+        help="If the selected backend needs runtime preparation, run apply-rules after saving it.",
+    )
+    default_parser.add_argument("--sudo", action="store_true", help="Run preparation via sudo when needed.")
+    approve_parser = subcommands.add_parser(
+        "approve",
+        help="Add an approved site and optional command mapping without hand-editing TOML.",
+    )
+    approve_parser.add_argument("target", help="URL, domain, host:port, or git@host:path to allow.")
+    approve_parser.add_argument(
+        "--command",
+        dest="command_prefix",
+        help='Command prefix to route to the approved profile, for example "mycli sync".',
+    )
+    approve_parser.add_argument(
+        "--tool",
+        help='Tool name to route to the approved profile, for example "mycli".',
+    )
+    approve_parser.add_argument(
+        "--profile",
+        default="approved",
+        help="Profile to update. Defaults to the user-approved unattended profile.",
+    )
+    approve_parser.add_argument(
+        "--tcp-port",
+        type=int,
+        action="append",
+        default=[],
+        help="Advanced override. Add an extra TCP port if URL/scheme inference is not enough.",
+    )
+    approve_parser.add_argument(
+        "--ask",
+        action="store_true",
+        help="Add the site, but keep the profile manual-review only.",
     )
     doctor_parser = subcommands.add_parser("doctor", help="Check WSL nftables backend readiness.")
     doctor_parser.add_argument("--json", action="store_true", help="Print the doctor report as JSON.")
@@ -301,6 +355,150 @@ def cmd_backend_info() -> int:
     return 0
 
 
+def _format_yes_no(value: str) -> str:
+    return "yes" if value == "true" else "no"
+
+
+def _missing_required_checks(report: dict) -> list[str]:
+    return [
+        str(check["name"])
+        for check in report.get("checks", [])
+        if check.get("required") == "true" and check.get("ok") != "true"
+    ]
+
+
+def _setup_recommendation(netns_report: dict) -> tuple[str, str]:
+    env = netns_report["environment"]
+    if netns_report["ready"]:
+        return (
+            "netns",
+            "WSL 2 namespace prerequisites are present, so wrapped network commands can get packet enforcement.",
+        )
+
+    missing = _missing_required_checks(netns_report)
+    if env.get("is_wsl") == "true" or env.get("is_wsl2") == "true":
+        reason = "WSL was detected, but isolated namespace mode is not ready"
+        if missing:
+            reason += ": missing " + ", ".join(missing)
+        return "hook_only", reason + "."
+
+    return (
+        "hook_only",
+        "This host does not look like the supported WSL 2 namespace target, so the portable hook layer is the safe default.",
+    )
+
+
+def _setup_command(mode: str) -> str:
+    if mode == "netns":
+        return "~/.codex/scripts/codex-net use netns --prepare --sudo"
+    if mode == "default":
+        return "~/.codex/scripts/codex-net use default --teardown --sudo"
+    return "~/.codex/scripts/codex-net use hook_only"
+
+
+def _print_setup_menu(config: dict, nft_report: dict, netns_report: dict) -> dict[str, str]:
+    env = netns_report["environment"]
+    recommended_mode, recommendation_reason = _setup_recommendation(netns_report)
+    missing = _missing_required_checks(netns_report)
+
+    print("Codex hardening backend setup")
+    print(f"current_backend: {config['backend']}")
+    print(f"configured_backend: {config.get('configured_backend')}")
+    print(f"backend_override: {config.get('backend_override')}")
+    print(f"host_platform: {env['platform']}")
+    print(f"is_wsl2: {_format_yes_no(env['is_wsl2'])}")
+    print(f"hook_only_ready: yes")
+    print(f"linux_wsl_netns_ready: {'yes' if netns_report['ready'] else 'no'}")
+    print(f"linux_wsl_nft_ready: {'yes' if nft_report['ready'] else 'no'}")
+    print("")
+    print("Choose a mode:")
+    print("  Setup will ask whether to save the selected mode as the future default.")
+    print(f"  1. Recommended for this host: {'Isolated namespace mode' if recommended_mode == 'netns' else 'Light hook-only mode'}")
+    print(f"     {recommendation_reason}")
+    print(f"     Runs: {_setup_command(recommended_mode)}")
+    print("  2. Light hook-only mode")
+    print("     Lowest friction. Validates visible network destinations, but does not provide packet isolation.")
+    print(f"     Runs: {_setup_command('hook_only')}")
+    if netns_report["ready"]:
+        print("  3. Strict WSL namespace mode")
+        print("     Stronger WSL isolation. Prepares nftables/network-namespace runtime state and may prompt for sudo.")
+        print(f"     Runs: {_setup_command('netns')}")
+    else:
+        detail = ", ".join(missing) if missing else "host prerequisites"
+        print("  3. Strict WSL namespace mode")
+        print(f"     Unavailable on this host right now: missing {detail}.")
+    print("  4. Return to configured default")
+    print("     Clears the local backend override and tears down active backend rules if needed.")
+    print(f"     Runs: {_setup_command('default')}")
+    print("  q. Quit without changing anything")
+    print("")
+    return {"1": recommended_mode, "2": "hook_only", "3": "netns", "4": "default"}
+
+
+def _namespace_for_setup_mode(mode: str) -> argparse.Namespace:
+    if mode == "netns":
+        return argparse.Namespace(
+            backend_choice="netns",
+            persist=False,
+            prepare=True,
+            sudo=True,
+            teardown=False,
+        )
+    if mode == "default":
+        return argparse.Namespace(
+            backend_choice="default",
+            persist=False,
+            prepare=False,
+            sudo=True,
+            teardown=True,
+        )
+    return argparse.Namespace(
+        backend_choice="hook_only",
+        persist=False,
+        prepare=False,
+        sudo=False,
+        teardown=False,
+    )
+
+
+def cmd_setup(print_only: bool) -> int:
+    config = load_config()
+    nft_report = doctor_report()
+    netns_report = netns_doctor_report()
+    choices = _print_setup_menu(config, nft_report, netns_report)
+
+    if print_only or not (sys.stdin.isatty() and sys.stdout.isatty()):
+        print("No changes made. Run `~/.codex/scripts/codex-net setup` in an interactive terminal to pick a mode.")
+        return 0
+
+    while True:
+        choice = input("Select a mode [1]: ").strip().lower() or "1"
+        if choice in {"q", "quit", "exit"}:
+            print("No changes made.")
+            return 0
+        if choice not in choices:
+            print("Choose 1, 2, 3, 4, or q.")
+            continue
+
+        mode = choices[choice]
+        if mode == "netns" and not netns_report["ready"]:
+            missing = _missing_required_checks(netns_report)
+            detail = ", ".join(missing) if missing else "host prerequisites"
+            print(f"Strict WSL namespace mode is unavailable: missing {detail}.")
+            print("Choose light hook-only mode or quit, then install the missing prerequisites and rerun setup.")
+            continue
+
+        synthetic_args = _namespace_for_setup_mode(mode)
+        if mode != "default":
+            persist_answer = input("Make this the default for future Codex sessions? [y/N]: ").strip().lower()
+            synthetic_args.persist = persist_answer in {"y", "yes"}
+            if synthetic_args.persist:
+                print("Saving this backend as the configured default.")
+
+        print(f"Applying: {_setup_command(mode)}")
+        return cmd_use(synthetic_args)
+
+
 def cmd_doctor(as_json: bool) -> int:
     report = doctor_report()
     netns_report = netns_doctor_report()
@@ -495,6 +693,235 @@ def cmd_use(args: argparse.Namespace) -> int:
     return cmd_backend_set(synthetic_args)
 
 
+def cmd_make_default(args: argparse.Namespace) -> int:
+    selected = _friendly_backend_choice(args.backend_choice)
+    if selected is None:
+        raise PolicyError("Use `codex-net use default` to clear a temporary override.")
+    synthetic_args = argparse.Namespace(
+        backend_name=selected,
+        persist=True,
+        prepare=args.prepare,
+        sudo=args.sudo,
+    )
+    return cmd_backend_set(synthetic_args)
+
+
+BARE_TOML_KEY_CHARS = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-")
+
+
+def _render_toml_value(value: object) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(_render_toml_value(item) for item in value) + "]"
+    escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _render_toml_key(key: str) -> str:
+    if key and all(char in BARE_TOML_KEY_CHARS for char in key):
+        return key
+    escaped = str(key).replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _find_toml_table_bounds(lines: list[str], table_name: str) -> tuple[int | None, int | None]:
+    header = f"[{table_name}]"
+    start = None
+    for index, line in enumerate(lines):
+        if line.strip() == header:
+            start = index
+            break
+    if start is None:
+        return None, None
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        stripped = lines[index].strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            end = index
+            break
+    return start, end
+
+
+def _ensure_toml_trailing_blank(lines: list[str]) -> None:
+    if lines and lines[-1].strip():
+        lines.append("")
+
+
+def _replace_or_add_toml_table(lines: list[str], table_name: str, rendered_table: str) -> None:
+    block = rendered_table.rstrip("\n").splitlines()
+    start, end = _find_toml_table_bounds(lines, table_name)
+    if start is None:
+        _ensure_toml_trailing_blank(lines)
+        lines.extend(block)
+        return
+    lines[start:end] = block
+
+
+def _upsert_toml_table_key(lines: list[str], table_name: str, key: str, value: object) -> None:
+    start, end = _find_toml_table_bounds(lines, table_name)
+    assignment = f"{_render_toml_key(key)} = {_render_toml_value(value)}"
+    if start is None or end is None:
+        _ensure_toml_trailing_blank(lines)
+        lines.append(f"[{table_name}]")
+        lines.append(assignment)
+        return
+
+    rendered_key = _render_toml_key(key)
+    for index in range(start + 1, end):
+        stripped = lines[index].strip()
+        if stripped.startswith(f"{rendered_key} ") or stripped.startswith(f"{rendered_key}="):
+            lines[index] = assignment
+            return
+
+    insert_at = end
+    while insert_at > start + 1 and not lines[insert_at - 1].strip():
+        insert_at -= 1
+    lines.insert(insert_at, assignment)
+
+
+def _render_profile_table(profile_name: str, profile: dict) -> str:
+    keys = (
+        "description",
+        "allow_localhost",
+        "allowed_domains",
+        "allowed_tcp_ports",
+        "allowed_udp_ports",
+        "require_approval",
+    )
+    lines = [f"[profiles.{profile_name}]"]
+    for key in keys:
+        lines.append(f"{key} = {_render_toml_value(profile[key])}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _append_unique(items: list, additions: list) -> list:
+    merged = list(items)
+    seen = {repr(item) for item in merged}
+    for item in additions:
+        marker = repr(item)
+        if marker in seen:
+            continue
+        merged.append(item)
+        seen.add(marker)
+    return merged
+
+
+def _infer_target_host_and_port(target: str, command_prefix: str | None, tool: str | None) -> tuple[str, int]:
+    text = target.strip()
+    if not text:
+        raise PolicyError("`codex-net approve` needs a URL, domain, host:port, or git@host:path target.")
+
+    scheme = ""
+    host = ""
+    port: int | None = None
+
+    if "://" in text:
+        parsed = urlparse(text)
+        scheme = parsed.scheme.lower()
+        host = parsed.hostname or ""
+        port = parsed.port
+    elif "@" in text and ":" in text and not text.startswith("http"):
+        host = text.rsplit("@", 1)[1].split(":", 1)[0].split("/", 1)[0]
+        scheme = "ssh"
+    else:
+        candidate = text.split("/", 1)[0]
+        if candidate.count(":") == 1:
+            maybe_host, maybe_port = candidate.rsplit(":", 1)
+            if maybe_port.isdigit():
+                host = maybe_host.strip("[]")
+                port = int(maybe_port)
+        if not host:
+            host = candidate.strip("[]")
+
+    host = host.strip().lower()
+    if not host:
+        raise PolicyError(f"Could not infer a host from `{target}`.")
+
+    if port is None:
+        command_name = ""
+        if command_prefix:
+            try:
+                command_name = shlex.split(command_prefix)[0]
+            except ValueError:
+                command_name = command_prefix.split()[0] if command_prefix.split() else ""
+        command_name = (tool or command_name).strip().lower()
+        if scheme in {"ssh", "git+ssh"} or command_name in {"ssh", "scp", "rsync"}:
+            port = 22
+        elif scheme == "http":
+            port = 80
+        else:
+            port = 443
+
+    if not 1 <= port <= 65535:
+        raise PolicyError(f"Inferred invalid TCP port `{port}` for `{target}`.")
+    return host, port
+
+
+def _approval_profile(config: dict, profile_name: str, require_approval: bool) -> dict:
+    existing = dict(config["profiles"].get(profile_name, {}))
+    return {
+        "description": existing.get("description") or "User-approved unattended destinations and commands.",
+        "allow_localhost": bool(existing.get("allow_localhost", False)),
+        "allowed_domains": list(existing.get("allowed_domains", [])),
+        "allowed_tcp_ports": list(existing.get("allowed_tcp_ports", [443])),
+        "allowed_udp_ports": list(existing.get("allowed_udp_ports", [53])),
+        "require_approval": require_approval,
+    }
+
+
+def cmd_approve(args: argparse.Namespace) -> int:
+    config = load_config()
+    policy_path = Path(config["path"])
+    profile_name = str(args.profile).strip() or "approved"
+    if profile_name not in config["profiles"] and profile_name != "approved":
+        raise PolicyError(f"Unknown profile `{profile_name}`. Use `approved` or an existing profile name.")
+
+    host, inferred_port = _infer_target_host_and_port(args.target, args.command_prefix, args.tool)
+    extra_ports = [port for port in args.tcp_port if 1 <= int(port) <= 65535]
+    tcp_ports = sorted(set([inferred_port, *extra_ports]))
+    require_approval = bool(args.ask)
+
+    profile = _approval_profile(config, profile_name, require_approval)
+    if host in LOCAL_HOSTS:
+        profile["allow_localhost"] = True
+    else:
+        profile["allowed_domains"] = sorted(set(_append_unique(profile["allowed_domains"], [host])))
+        profile["allowed_udp_ports"] = sorted(set(_append_unique(profile["allowed_udp_ports"], [53])))
+    profile["allowed_tcp_ports"] = sorted(set(_append_unique(profile["allowed_tcp_ports"], tcp_ports)))
+    profile["require_approval"] = require_approval
+
+    lines = policy_path.read_text().splitlines() if policy_path.exists() else []
+    _replace_or_add_toml_table(lines, f"profiles.{profile_name}", _render_profile_table(profile_name, profile))
+
+    if args.command_prefix:
+        command = " ".join(shlex.split(args.command_prefix))
+        if not command:
+            raise PolicyError("`--command` must not be empty.")
+        _upsert_toml_table_key(lines, "command_profiles", command, profile_name)
+    if args.tool:
+        tool = str(args.tool).strip()
+        if not tool:
+            raise PolicyError("`--tool` must not be empty.")
+        _upsert_toml_table_key(lines, "tool_profiles", tool, profile_name)
+
+    policy_path.write_text("\n".join(lines).rstrip() + "\n")
+
+    print(f"policy_path: {policy_path}")
+    print(f"profile: {profile_name}")
+    print(f"domain: {host}")
+    print(f"tcp_ports: {', '.join(str(port) for port in tcp_ports)}")
+    print(f"require_approval: {'true' if require_approval else 'false'}")
+    if args.command_prefix:
+        print(f"command_profile: {command} -> {profile_name}")
+    if args.tool:
+        print(f"tool_profile: {args.tool.strip()} -> {profile_name}")
+    return 0
+
+
 def cmd_netns_spike(args: argparse.Namespace) -> int:
     wrapped_command = list(args.wrapped_command)
     if wrapped_command and wrapped_command[0] == "--":
@@ -524,12 +951,18 @@ def main() -> int:
         return cmd_show_config()
     if args.command == "backend-info":
         return cmd_backend_info()
+    if args.command == "setup":
+        return cmd_setup(args.print_only)
     if args.command == "backend-set":
         return cmd_backend_set(args)
     if args.command == "backend-clear":
         return cmd_backend_clear(args)
     if args.command == "use":
         return cmd_use(args)
+    if args.command in {"make-default", "default"}:
+        return cmd_make_default(args)
+    if args.command == "approve":
+        return cmd_approve(args)
     if args.command == "doctor":
         return cmd_doctor(args.json)
     if args.command == "compile-profiles":

@@ -30,6 +30,21 @@ class BlockDestructiveTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("Recursive deletion at filesystem root", result.stderr)
 
+    def test_root_glob_delete_is_denied(self) -> None:
+        result = run_hook("rm -rf /*")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("Recursive deletion at filesystem root", result.stderr)
+
+    def test_home_env_delete_is_denied(self) -> None:
+        result = run_hook("rm -rf $HOME")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("home directory", result.stderr)
+
+    def test_absolute_home_directory_delete_is_denied(self) -> None:
+        result = run_hook("rm -rf /home/mckec")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("home directory", result.stderr)
+
     def test_manual_only_pattern_is_denied(self) -> None:
         result = run_hook("git reset --hard HEAD~1")
         self.assertEqual(result.returncode, 2)

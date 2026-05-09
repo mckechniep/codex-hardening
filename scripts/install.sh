@@ -51,20 +51,18 @@ install -m 0644 "${repo_dir}/scripts/codex_net_policy.py" "${codex_dir}/scripts/
 install -m 0644 "${repo_dir}/scripts/codex_net_netns.py" "${codex_dir}/scripts/codex_net_netns.py"
 install -m 0644 "${repo_dir}/scripts/codex_net_wsl.py" "${codex_dir}/scripts/codex_net_wsl.py"
 install -m 0755 "${repo_dir}/scripts/merge_config.py" "${codex_dir}/scripts/merge_config.py"
+install -m 0755 "${repo_dir}/scripts/merge_network_profiles.py" "${codex_dir}/scripts/merge_network_profiles.py"
 install -m 0755 "${repo_dir}/scripts/merge_developer_instructions.py" "${codex_dir}/scripts/merge_developer_instructions.py"
 install -m 0755 "${repo_dir}/scripts/codex_net_backend.py" "${codex_dir}/scripts/codex_net_backend.py"
 install -m 0755 "${repo_dir}/scripts/codex-net" "${codex_dir}/scripts/codex-net"
-
-if [[ ! -f "${codex_dir}/policies/network_profiles.toml" ]]; then
-  install -m 0644 "${repo_dir}/policies/network_profiles.toml" "${codex_dir}/policies/network_profiles.toml"
-fi
 
 python3 "${repo_dir}/scripts/merge_hooks.py" \
   "${repo_dir}/templates/hooks.json.template" \
   "${codex_dir}/hooks.json"
 
-config_merge_output="$("${codex_dir}/scripts/merge_config.py" "${repo_dir}/templates/config-hardening-snippet.toml" "${codex_dir}/config.toml" 2>/dev/null || true)"
-instructions_merge_output="$("${codex_dir}/scripts/merge_developer_instructions.py" "${repo_dir}/templates/model-instructions.md" "${codex_dir}/config.toml" 2>/dev/null || true)"
+network_policy_merge_output="$("${codex_dir}/scripts/merge_network_profiles.py" "${repo_dir}/policies/network_profiles.toml" "${codex_dir}/policies/network_profiles.toml")"
+config_merge_output="$("${codex_dir}/scripts/merge_config.py" "${repo_dir}/templates/config-hardening-snippet.toml" "${codex_dir}/config.toml")"
+instructions_merge_output="$("${codex_dir}/scripts/merge_developer_instructions.py" "${repo_dir}/templates/model-instructions.md" "${codex_dir}/config.toml")"
 if [[ -n "${instructions_merge_output}" ]]; then
   if [[ -n "${config_merge_output}" ]]; then
     config_merge_output="${config_merge_output}
@@ -80,12 +78,11 @@ Installed Codex hardening assets into ${codex_dir}
 Backup created at ${backup_dir}
 
 Next steps:
-1. Pick a backend explicitly:
-   ${codex_dir}/scripts/codex-net backend-info
-   ${codex_dir}/scripts/codex-net use hook_only
-   ${codex_dir}/scripts/codex-net use netns --prepare --sudo
+1. Pick a backend with the guided setup menu:
+   ${codex_dir}/scripts/codex-net setup
 2. Add ${codex_dir}/scripts to your PATH if you want to call codex-net directly
-3. Review ${codex_dir}/policies/network_profiles.toml if you want to persist a backend later
+3. Approve trusted sites or commands as needed:
+   ${codex_dir}/scripts/codex-net approve https://api.example.com --command "mycli sync"
 4. Restart Codex after you pick a backend
 EOF
 
@@ -94,6 +91,14 @@ if [[ -n "${config_merge_output}" ]]; then
 
 Config merge summary:
 ${config_merge_output}
+EOF
+fi
+
+if [[ -n "${network_policy_merge_output}" ]]; then
+  cat <<EOF
+
+Network policy merge summary:
+${network_policy_merge_output}
 EOF
 fi
 

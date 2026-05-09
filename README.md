@@ -46,6 +46,20 @@ The goal is to make Codex behave like this:
 4. Network commands are grouped into named profiles such as `dev_local`, `registries`, `git_readonly`, or `relaxed_network`.
 5. Stronger WSL network isolation can be enabled later, but the default path stays lightweight.
 
+## What This Bundle Does Now
+
+After install, the bundle:
+
+- backs up the current `~/.codex` config, hooks, rules, policies, instructions, and scripts
+- installs Codex `PreToolUse` hooks for destructive-command and network-egress checks
+- installs native execpolicy rules for coarse manual-only operations
+- merges hardening defaults into `~/.codex/config.toml`
+- merges shipped network profiles into `~/.codex/policies/network_profiles.toml`
+- appends managed developer instructions that nudge Codex toward `codex-net autoexec -- ...` for likely network commands
+- installs `~/.codex/scripts/codex-net` for profile-based network execution
+
+The default backend is `hook_only`. It is an intent and command-validation layer, not packet isolation. The stronger `linux_wsl_netns` backend can be enabled explicitly on capable WSL hosts and runs wrapped commands through a transient network namespace with nftables rules.
+
 ## How A Command Flows
 
 When Codex tries to run a shell command, the flow is:
@@ -88,7 +102,7 @@ profile: registries
 real command: curl https://github.com
 ```
 
-That lets `codex-net` check the selected profile before running the real command. In the default `hook_only` backend, this is mostly command validation and intent tracking. In stronger backends like `linux_wsl_netns`, the wrapper is also where the per-command network namespace and firewall rules are attached.
+That lets `codex-net` check the selected profile before running the real command. In the default `hook_only` backend, this is literal command validation and intent tracking: profile-wrapped commands must expose an inspected network destination in the command text. In stronger backends like `linux_wsl_netns`, the wrapper is also where the per-command network namespace and firewall rules are attached, so arbitrary wrapped commands can be constrained by packet policy instead of command-string inspection alone.
 
 `autoexec` can choose a profile for common commands:
 
@@ -102,6 +116,25 @@ That lets `codex-net` check the selected profile before running the real command
 Profiles live in `~/.codex/policies/network_profiles.toml` after install. The repo copy is [policies/network_profiles.toml](./policies/network_profiles.toml).
 
 Profiles do not inherit from each other. If two profiles allow the same host, that is duplication, not inheritance.
+
+The host recommendation from `codex-net setup` is automatic. Users do not configure a special "recommended" profile. The setup menu checks the current machine:
+
+- if WSL namespace prerequisites are ready, option `1` recommends `linux_wsl_netns`
+- otherwise, option `1` recommends `hook_only`
+
+The setup menu now asks whether to make the selected backend the default for future Codex sessions. Users can also do it directly:
+
+```bash
+~/.codex/scripts/codex-net make-default hook_only
+```
+
+or, on a WSL host where strict mode is ready:
+
+```bash
+~/.codex/scripts/codex-net make-default netns --prepare --sudo
+```
+
+The guided picker still supports temporary trial mode. Use option `4` in `codex-net setup` to clear a temporary override and return to the configured default.
 
 Built-in profiles:
 
@@ -138,6 +171,82 @@ require_approval = false
 ```
 
 If you want human review first, leave `require_approval = true` and run the command manually after checking it.
+
+## Allowing Sites Or Commands
+
+Users can allow specific sites and commands in `~/.codex/policies/network_profiles.toml`.
+
+The easy path is `codex-net approve`. Users give it a URL or Git-style host, and it infers normal ports:
+
+- `https://...` -> HTTPS
+- `http://...` -> HTTP
+- `ssh://...`, `git@host:path`, `ssh`, `scp`, or `rsync` commands -> SSH
+
+Examples:
+
+```bash
+~/.codex/scripts/codex-net approve https://api.mycompany.com --command "mycli sync"
+~/.codex/scripts/codex-net approve git@github.com:example/repo.git --command "git ls-remote"
+~/.codex/scripts/codex-net approve https://api.mycompany.com --tool mycli
+```
+
+That updates the `approved` profile and maps the command or tool to it. The default `approved` profile has `require_approval = false`, so matching wrapped commands can run unattended.
+In `hook_only`, the command still needs the destination visible in the command text, such as `mycli sync https://api.mycompany.com` or `git ls-remote git@github.com:example/repo.git`. Implicit commands like `git fetch origin` need the stricter namespace backend or a manual run because the hook cannot see the real remote host.
+
+Only unusual services need an explicit port:
+
+```bash
+~/.codex/scripts/codex-net approve https://internal.example.com --command "internal sync" --tcp-port 8443
+```
+
+The underlying TOML looks like this after approval:
+
+```toml
+[profiles.approved]
+description = "User-approved unattended destinations and commands."
+allow_localhost = false
+allowed_domains = [
+  "api.mycompany.com",
+]
+allowed_tcp_ports = [443]
+allowed_udp_ports = [53]
+require_approval = false
+
+[command_profiles]
+"mycli sync" = "approved"
+```
+
+Then this can run through policy:
+
+```bash
+~/.codex/scripts/codex-net autoexec -- mycli sync https://api.mycompany.com
+```
+
+With `require_approval = false`, Codex may run matching wrapped commands unattended. With `require_approval = true`, this bundle blocks Codex from running that profile automatically and expects the human to run it after review.
+
+Advanced users can still hand-edit a custom profile:
+
+```toml
+[tool_profiles]
+mycli = "custom"
+
+[profiles.custom]
+description = "My company API."
+allow_localhost = false
+allowed_domains = ["api.mycompany.com"]
+allowed_tcp_ports = [443]
+allowed_udp_ports = [53]
+require_approval = false
+```
+
+For broad personal use, users can route specific commands to `relaxed_network`, which allows any remote domain on common ports:
+
+```toml
+[command_profiles]
+"mycli sync" = "relaxed_network"
+```
+
+That is convenient, but less strict. The safer pattern is to add only the exact domains and ports the user trusts.
 
 ## Attribution
 
@@ -203,37 +312,77 @@ This repo intentionally does not include any real `history.jsonl`, `auth.json`, 
 
 1. Clone this repo.
 2. Run `scripts/enable.sh`.
-3. Pick a backend explicitly from the commands it prints.
+3. Answer the guided backend setup menu.
 4. Restart Codex.
 
-`scripts/enable.sh` runs the lower-level installer, then shows the backend chooser and the exact commands for `hook_only`, `linux_wsl_netns`, and rollback.
-The installer copies hooks, rules, policies, helper scripts, and a developer-instruction snippet into `~/.codex`, merges the hardening hooks into `~/.codex/hooks.json`, and safely merges the hardening config into `~/.codex/config.toml`: missing settings are added automatically, but conflicting existing user settings are left unchanged and reported in the install summary.
+`scripts/enable.sh` runs the lower-level installer, then launches `codex-net setup`, an interactive menu that detects whether the host looks like supported WSL 2, checks backend readiness, and lets the user choose light hook-only mode, stricter WSL namespace mode, or rollback/default mode.
+The installer copies hooks, rules, policies, helper scripts, and a developer-instruction snippet into `~/.codex`, merges the hardening hooks into `~/.codex/hooks.json`, safely merges the hardening config into `~/.codex/config.toml`, and safely merges the shipped network policy into `~/.codex/policies/network_profiles.toml`.
 The installer adds the hardening network guidance to `developer_instructions` with a managed block so Codex still keeps its built-in instruction file while preferring `codex-net autoexec -- ...` for likely networked shell commands before the hook fallback has to block them.
+If an existing config or policy TOML file is malformed, install fails loudly instead of pretending the hardening was applied.
+
+Quick install:
+
+```bash
+git clone <this-repo-url>
+cd codex-hardening
+scripts/enable.sh
+```
+
+To rerun the backend picker later:
+
+```bash
+~/.codex/scripts/codex-net setup
+```
 
 ## Config Merge Notes
 
-The config merge script manages these settings:
+The config merge script manages these hardening settings:
 
 - `approval_policy = "on-request"`
 - `sandbox_mode = "workspace-write"`
 - `web_search = "cached"`
 - `[history] persistence = "none"`
 - `[sandbox_workspace_write] network_access = false`
-- `[features] codex_hooks = true`
+- `[features] hooks = true`
 - `[shell_environment_policy] inherit = "core"`
 - `[shell_environment_policy] include_only = [...]`
+
+For those managed hardening keys, the installer follows this rule:
+
+- missing settings are added
+- known unsafe settings are repaired
+- stricter safe settings are preserved
+- unrelated user settings are preserved
+- secret-looking environment names are pruned from `shell_environment_policy.include_only`
+
+Examples of repaired settings:
+
+- `approval_policy = "never"` becomes `approval_policy = "on-request"`
+- `sandbox_mode = "danger-full-access"` becomes `sandbox_mode = "workspace-write"`
+- `[sandbox_workspace_write] network_access = true` becomes `false`
+- `[features] codex_hooks` is removed if present, and `[features] hooks = true` is added
+- `[history] persistence` values other than `"none"` become `"none"`
+- `[shell_environment_policy] inherit = "all"` becomes `"core"`
+
+Examples of preserved settings:
+
+- `sandbox_mode = "read-only"` is kept because it is stricter than the baseline
+- `web_search = false` is kept because it is stricter than cached search
+- `[shell_environment_policy] inherit = "none"` is kept because it is stricter than `core`
+- trusted projects, plugin settings, model preferences, UI settings, and other unrelated keys are not rewritten
 
 The installer also appends a managed block to this additive setting:
 
 - `developer_instructions`
 
-It intentionally does not force-overwrite conflicting values in an existing `config.toml` if it contains:
+For `~/.codex/policies/network_profiles.toml`, the installer now also:
 
-- trusted project entries
-- plugin settings
-- model preferences
-- existing custom `developer_instructions`
-- UI settings
+- adds missing top-level policy settings
+- adds missing backend sections, profiles, tool mappings, and command mappings
+- extends the shipped stock-profile allowlists and port lists with any newly added defaults
+- leaves existing user-selected profile scalar settings unchanged
+
+That means a user who intentionally picked `linux_wsl_netns`, changed a profile to require approval, or added custom profiles should keep that policy. The installer adds missing shipped structure around it and reports anything it skipped.
 
 ## Testing
 
@@ -283,7 +432,8 @@ The design rationale for these controls is documented in [SECURITY-RATIONALE.md]
 Blunt version:
 
 - this repo is useful today as a guardrail bundle
-- it is not yet true network containment on stock WSL
+- the default `hook_only` backend is not packet containment
+- the explicit `linux_wsl_netns` backend provides first-pass packet enforcement on capable WSL hosts
 
 What it is already good at:
 
@@ -292,12 +442,15 @@ What it is already good at:
 - blocking direct, explicit shell network commands unless they go through `codex-net`
 - forcing network use into named profiles instead of silent ambient access
 - reducing inherited shell environment so tokens and local state are exposed less broadly
+- repairing known unsafe managed Codex settings during install while preserving unrelated user settings
+- running wrapped commands through transient network namespaces when `linux_wsl_netns` is selected and prepared
 
-What it is not yet good at on stock WSL:
+What still has limits:
 
-- reliably containing arbitrary network-capable binaries below the shell-command layer
-- proving that implicit commands like `git fetch origin` or `npm install` can only reach approved destinations without a human decision
-- delivering strong Linux-side packet enforcement on the default Microsoft WSL kernel
+- `hook_only` cannot contain arbitrary network-capable binaries below the shell-command layer
+- `hook_only` still requires literal, inspectable destinations for profile-wrapped commands
+- `linux_wsl_netns` still has first-pass DNS behavior, not the planned local policy DNS stub
+- `linux_wsl_nft` remains kernel-conditional and depends on `CONFIG_NFT_SOCKET`
 
 If you want a stronger stock-WSL-compatible backend, see [docs/stock-wsl-backend-options.md](./docs/stock-wsl-backend-options.md).
 
@@ -313,24 +466,25 @@ This repo now uses profile-based network policy only. The legacy JSON allowlist 
 
 This repo includes a WSL-first network-enforcement backend that keeps Codex offline by default but allows wrapped, profile-based network access with real Linux-side egress controls.
 
-See [docs/wsl-first-architecture.md](./docs/wsl-first-architecture.md) for the architecture and [templates/network-profiles.template.toml](./templates/network-profiles.template.toml) for the planned policy shape.
+See [docs/wsl-first-architecture.md](./docs/wsl-first-architecture.md) for the architecture and [templates/network-profiles.template.toml](./templates/network-profiles.template.toml) for the policy shape.
 
 Supported default today:
 
 - `hook_only` is the supported backend on stock WSL and remains the default shipped policy
 - `linux_wsl_nft` is kernel-dependent and should be treated as conditional, not baseline
-- if you are on the stock Microsoft WSL kernel, expect to stay on `hook_only` unless you intentionally move to a kernel that enables the required nft socket support
 - a WSL 2 setup that boots a custom kernel through `.wslconfig` can still be a valid `linux_wsl_nft` target if that kernel enables the required nft socket support and passes `codex-net doctor`
-- `linux_wsl_netns` now has a first-pass real execution path for stock WSL, but it is still an advanced path rather than the default install recommendation
+- `linux_wsl_netns` has a first-pass real execution path for stock WSL and is the stronger optional path when `codex-net doctor` says it is ready
 
 Today, the workflow is:
 
 - direct shell network commands are blocked when a network profile config is present
-- wrapped commands must go through `codex-net exec --profile ... -- ...`
+- profile-wrapped commands must go through `codex-net exec --profile ... -- ...`
 - `codex-net autoexec -- ...` can now choose the mapped profile automatically for common commands such as `git fetch origin`, `git pull origin main`, `npm ci`, `npm update`, or `curl https://github.com`
 - the installed developer instructions now bias Codex toward emitting `codex-net autoexec -- ...` directly for likely network-intent shell commands
 - the wrapper validates the selected profile before launching the command
+- in `hook_only`, wrapped commands must expose a literal destination the policy can inspect; arbitrary profile-wrapped binaries require `linux_wsl_netns`, `linux_wsl_nft`, or manual execution
 - profiles marked `require_approval = true` are denied in the hook/wrapper execution path because Codex `PreToolUse` hooks cannot currently produce a native approval prompt; run those commands manually after review, or set `require_approval = false` for profiles you intentionally allow unattended
+- `codex-net setup` provides the guided backend picker used by `scripts/enable.sh`; it recommends hook-only mode on non-WSL or unready hosts and offers WSL namespace isolation when prerequisites are present
 - `codex-net backend-info` explains the available backends, their readiness, and the current effective selection
 - `codex-net use hook_only`, `codex-net use netns --prepare --sudo`, and `codex-net use default --teardown --sudo` cover the common choose / enable / rollback flow
 - `codex-net backend-set <backend>` enables a backend temporarily through an override file instead of permanently editing the user's policy
@@ -342,9 +496,9 @@ Today, the workflow is:
 - `codex-net backend-status` checks whether the recorded backend state still matches the compiled artifacts on disk
 - `codex-net remove-rules --sudo` removes the installed nftables table and the prepared slice units cleanly
 - `codex-net exec` launches wrapped commands through a profile scope inside a persistent per-profile slice
-- `codex-net doctor --json` now reports readiness for both `linux_wsl_nft` and the planned `linux_wsl_netns` backend
+- `codex-net doctor --json` reports readiness for both `linux_wsl_nft` and `linux_wsl_netns`
 - `codex-net netns-spike --sudo -- <command>` performs the experimental Phase 5A namespace create/run/cleanup check on stock WSL
-- when `backend = "linux_wsl_netns"`, `codex-net apply-rules --sudo` installs base runtime nftables scaffolding plus local backend state, `codex-net backend-status` reports whether that base runtime still matches disk state and whether any execution records are active, and `codex-net exec --profile ... -- ...` now creates a per-execution namespace, installs a namespace-local `hosts` file plus fail-closed `resolv.conf`, applies a per-execution nftables table, and then runs the wrapped command as the original user
+- when `backend = "linux_wsl_netns"`, `codex-net apply-rules --sudo` installs base runtime nftables scaffolding plus local backend state, `codex-net backend-status` reports whether that base runtime still matches disk state and whether any execution records are active, and `codex-net exec --profile ... -- ...` creates a per-execution namespace, installs namespace-local name resolution assets, applies a per-execution nftables table, and then runs the wrapped command as the original user
 
 If `codex-net doctor` reports `nft_socket_expr: ok`, you can try real WSL enforcement by setting `backend = "linux_wsl_nft"` in `network_profiles.toml`, then run:
 
@@ -368,7 +522,8 @@ When `backend = "linux_wsl_netns"` is enabled, the first-pass execution path is:
 
 - require applied base runtime state from `codex-net apply-rules --sudo`
 - resolve the selected profile's allowed domains to current IPv4 answers
-- build a namespace-local `hosts` file for those domains and a dead-end `resolv.conf`
+- build a namespace-local `hosts` file for explicit profile domains
+- install a dead-end `resolv.conf` for explicit domain profiles, or host resolver config for wildcard profiles such as `relaxed_network`
 - create a per-execution namespace and veth pair
 - apply a per-execution nftables table keyed to that namespace interface and subnet
 - run the wrapped command as the original user inside the namespace
@@ -379,24 +534,23 @@ Current caveat for that backend:
 - explicit `localhost` targets are rejected, because namespace loopback is not host loopback yet
 - if you need a host-local service, wrap the command through a shell and use `$CODEX_NET_HOST_GATEWAY`, for example `codex-net exec --profile dev_local -- sh -lc 'curl http://$CODEX_NET_HOST_GATEWAY:3000'`
 - allowed hostnames currently resolve through the generated `hosts` file, so the backend fails closed if a profile domain cannot be resolved before launch
+- wildcard profiles such as `relaxed_network` allow any remote address on the profile's allowed ports and use the host resolver config instead of the generated `hosts` file
 
 Beginner-friendly backend selection flow:
 
 ```bash
 scripts/enable.sh
-~/.codex/scripts/codex-net use hook_only
-~/.codex/scripts/codex-net use netns --prepare --sudo
+~/.codex/scripts/codex-net setup
 ~/.codex/scripts/codex-net autoexec -- git fetch origin
-~/.codex/scripts/codex-net use default --teardown --sudo
 ```
 
 That sequence:
 
 - explains the backends and readiness
-- enables `linux_wsl_netns` temporarily without permanently editing the user's policy file
-- prepares its runtime state
+- asks the user how strict they want the network controls to be
+- recommends the portable hook-only backend unless WSL namespace isolation is ready
+- prepares WSL namespace runtime state when the user picks strict mode
 - runs a networked command with automatic profile selection
-- tears it down and returns to the configured default backend
 
 Important kernel requirement:
 
@@ -455,7 +609,7 @@ Expected shape:
 
 - Command-string inspection is not a full shell parser.
 - Aliases, nested shell tricks, and indirect execution can evade simple matching.
-- the first-pass `linux_wsl_netns` backend currently uses generated `hosts` files instead of a local policy DNS stub
+- the first-pass `linux_wsl_netns` backend currently uses generated `hosts` files for explicit domain profiles and the host resolver config for wildcard profiles instead of a local policy DNS stub
 - The network hook only sees literal command text.
 - Dynamic destinations like `$URL` are blocked because they cannot be verified safely.
 - This protects Codex-driven shell actions, not commands a human runs directly.

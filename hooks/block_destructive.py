@@ -11,8 +11,20 @@ HARD_BLOCK_PATTERNS = [
         "Recursive deletion at filesystem root is never allowed for Codex.",
     ),
     (
+        re.compile(r"\brm(?:\s+-[^\n;&|]+)*\s+(?:--\s+)?(?:--no-preserve-root\s+)?/(?:\*|\.\.?)?(?:\s|$)"),
+        "Recursive deletion at filesystem root is never allowed for Codex.",
+    ),
+    (
         re.compile(r"\brm\s+-[^\n;&|]*[rf][^\n;&|]*\s+~(?:/|\s|$)"),
         "Recursive deletion in the home directory is never allowed for Codex.",
+    ),
+    (
+        re.compile(r"\brm(?:\s+-[^\n;&|]+)*\s+(?:--\s+)?(?:~|\$home|\$\{home\})(?:/|\s|$)"),
+        "Recursive deletion in the home directory is never allowed for Codex.",
+    ),
+    (
+        re.compile(r"\brm(?:\s+-[^\n;&|]+)*\s+(?:--\s+)?(?:/home/[^/\s]+|/users/[^/\s]+|/root)/?(?:\s|$)"),
+        "Recursive deletion of a home directory is never allowed for Codex.",
     ),
     (
         re.compile(r"\bmkfs(?:\.[a-z0-9_+-]+)?\b"),

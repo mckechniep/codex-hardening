@@ -291,6 +291,45 @@ class RenderNftablesRulesTests(unittest.TestCase):
             rendered,
         )
 
+    def test_render_nftables_rules_allows_wildcard_remote_profile_ports(self) -> None:
+        manifest = {
+            "source_path": "/tmp/policy.toml",
+            "backend_linux_wsl_nft": {
+                "use_systemd_user": True,
+                "nft_table_name": "codex_hardening",
+                "chain_name": "codex_net_output",
+            },
+            "resolvers": {"ipv4": ["172.20.0.1"], "ipv6": []},
+            "profiles": {
+                "relaxed_network": {
+                    "allow_localhost": True,
+                    "allow_any_remote": True,
+                    "allowed_tcp_ports": [80, 443],
+                    "allowed_udp_ports": [53],
+                    "resolved_ipv4": [],
+                    "resolved_ipv6": [],
+                    "set_names": {
+                        "ipv4": "relaxed_network_ipv4",
+                        "ipv6": "relaxed_network_ipv6",
+                        "tcp_ports": "relaxed_network_tcp_ports",
+                        "udp_ports": "relaxed_network_udp_ports",
+                    },
+                    "runtime_units": {
+                        "mode": "systemd_user",
+                        "scope_unit": "codex-net-relaxed-network.scope",
+                        "slice_unit": "app-codex-net-relaxed-network.slice",
+                        "cgroup_match_level": 7,
+                        "cgroup_path": "user.slice/user-1000.slice/user@1000.service/app.slice/app-codex.slice/app-codex-net.slice/app-codex-net-relaxed-network.slice",
+                    },
+                }
+            },
+        }
+
+        rendered = render_nftables_rules(manifest)
+
+        self.assertIn('oifname != "lo" tcp dport @relaxed_network_tcp_ports accept', rendered)
+        self.assertIn('oifname != "lo" udp dport @relaxed_network_udp_ports accept', rendered)
+
 
 class KernelCapabilityTests(unittest.TestCase):
     @mock.patch.object(codex_net_wsl, "_kernel_config_value", return_value="y")

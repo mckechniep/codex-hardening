@@ -72,17 +72,20 @@ Goal: make the supported path explicit for normal users.
 
 - Treat `hook_only` as the supported default on stock WSL.
 - Keep `linux_wsl_nft` available only behind explicit kernel-capability checks.
+- Ship `linux_wsl_netns` as the stronger optional stock-WSL path.
 - Tighten install and README guidance so normal users are not pushed toward unsupported kernel-level setup.
 
 Exit criteria:
 
 - A beginner on stock WSL is guided toward `hook_only` by default.
 - Kernel-dependent paths are clearly labeled as conditional.
+- Stronger stock-WSL enforcement points to `linux_wsl_netns`, not `linux_wsl_nft`.
 
 ## Phase 4: Operator UX And Recovery
 
 Goal: make hardening maintainable instead of fragile.
 
+- Current status: install now backs up user state, fails loudly on malformed TOML, merges missing defaults, and repairs known unsafe managed config values.
 - Add `install.sh --dry-run`.
 - Add a rollback helper that restores the last backup cleanly.
 - Add a policy linter for `network_profiles.toml`.
@@ -100,11 +103,11 @@ Exit criteria:
 
 Goal: improve real protection rather than just policy expression.
 
+- Current status: `linux_wsl_netns` has a first-pass real execution path using transient namespaces, veth pairs, nftables rules, generated `hosts` files for explicit domains, and host resolver config for wildcard profiles.
 - Route wrapped command DNS through a local stub resolver when using the WSL backend.
 - Revisit whether DNS-only leakage needs stronger first-class controls.
-- Design a stock-WSL-compatible stronger backend that does not depend on `CONFIG_NFT_SOCKET`.
-- Bias that design toward a namespace-based backend instead of a user-identity workaround or a proxy-only model. See `docs/stock-wsl-backend-options.md`.
-- Turn that backend into an implementation plan covering command lifecycle, namespace setup, DNS control, local-dev allowances, and cleanup or rollback. See `docs/namespace-backend-plan.md`.
+- Continue hardening the namespace-based backend instead of a user-identity workaround or a proxy-only model. See `docs/stock-wsl-backend-options.md`.
+- Keep the namespace backend implementation plan current as DNS control, local-dev allowances, and cleanup or rollback mature. See `docs/namespace-backend-plan.md`.
 - Reduce exposure of ambient credentials and tokens during wrapped execution.
 - Consider lightweight telemetry or audit logs for blocked and wrapped commands.
 - Review whether additional non-shell surfaces in Codex need hardening beyond Bash hooks.

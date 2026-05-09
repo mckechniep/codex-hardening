@@ -2,12 +2,13 @@
 
 ## Why This Document Exists
 
-The repo is useful today, but only up to a point.
+The repo now has a lightweight default backend and a stronger stock-WSL-capable backend.
 
-On stock WSL, the supported backend is still `hook_only`.
-That gives you better defaults and real guardrails, but it is not the same thing as kernel-enforced network containment.
+`hook_only` remains the default because it is low-friction and does not require privileged setup. It gives better defaults and useful guardrails, but it is not packet containment.
 
-This document compares realistic ways to build a stronger backend that still works on a normal WSL setup without asking users to swap kernels.
+`linux_wsl_netns` is the stronger optional path. It creates a transient network namespace per wrapped command and applies nftables rules to constrain actual traffic without requiring a custom WSL kernel.
+
+This document records the backend tradeoffs and the current posture.
 
 ## What "Good Enough" Should Mean
 
@@ -34,11 +35,13 @@ What it cannot do:
 - see the real destination for implicit commands such as `git fetch origin`
 - stop arbitrary binaries that open sockets after launch
 - provide packet-level enforcement on stock WSL
+- run arbitrary profile-wrapped commands without an inspectable literal destination
 
 Conclusion:
 
-- keep this as the supported baseline
-- do not pretend it is the final answer
+- keep this as the default baseline
+- use it for simple, inspectable network commands and ordinary offline work
+- do not market it as containment
 
 ## Option 1: Proxy-First Backend
 
@@ -116,16 +119,16 @@ Why it is harder:
 
 Verdict:
 
-- best long-term direction for a strong stock-WSL backend
-- worth real engineering time
+- implemented as the first-pass `linux_wsl_netns` backend
+- strongest stock-WSL path in this bundle today
 
 ## Recommended Direction
 
-Build toward a namespace-based backend.
+Use the namespace-based backend when packet enforcement matters.
 
 Reason:
 
-- it is the only option in this comparison that has a credible path to real traffic enforcement on stock WSL without forcing users onto a custom kernel
+- it is the only option in this comparison that has a credible path to real traffic enforcement on stock WSL without forcing users onto a custom kernel, and this repo now ships a first-pass implementation
 - it avoids the workspace-ownership problems of per-profile Unix users
 - it is stronger and broader than a proxy-first design
 
@@ -142,7 +145,7 @@ Short-term work:
 
 Exit condition:
 
-- the baseline is honest, predictable, and low-friction
+- done for the current bundle: the hook blocks direct network commands, rejects dynamic or destination-changing options, and fails closed for uninspected wrapped commands under `hook_only`
 
 ### Stage 2: Add A Limited Proxy Assist
 
@@ -166,11 +169,11 @@ Core engineering step:
 
 Exit condition:
 
-- a wrapped implicit command can run, but real traffic is still constrained by profile
+- done as a first-pass `linux_wsl_netns` execution path: wrapped commands run in a transient namespace and traffic is constrained by profile rules
 
 ### Stage 4: Validate On Real Stock WSL
 
-Required before calling it supported:
+Required before making it the default recommendation:
 
 - test on a default Microsoft WSL kernel
 - document distro, systemd, package, and privilege requirements
@@ -179,7 +182,7 @@ Required before calling it supported:
 
 Exit condition:
 
-- stock-WSL users can set up the stronger backend without kernel replacement
+- stock-WSL users can set up the stronger backend without kernel replacement and the docs clearly explain DNS and local-dev caveats
 
 ## What Not To Do
 
@@ -192,7 +195,7 @@ Avoid these traps:
 
 ## Bottom Line
 
-Today, this repo is a useful guardrail bundle, not a complete containment system.
+Today, this repo is both a useful default guardrail bundle and an optional first-pass stock-WSL namespace backend.
 
 That is still worth something:
 
@@ -200,5 +203,6 @@ That is still worth something:
 - destructive-command blocking
 - explicit profile-based network intent
 - reduced ambient shell exposure
+- optional transient namespace enforcement with `linux_wsl_netns`
 
-But if the goal is "strong stock-WSL network enforcement," the next serious move is a namespace-based backend, not more incremental work on the current nft socket design.
+If the goal is "strong stock-WSL network enforcement," use and keep hardening `linux_wsl_netns`; do not invest more in the kernel-dependent nft socket design as the stock-WSL default.

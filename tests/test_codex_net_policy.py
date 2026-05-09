@@ -118,6 +118,34 @@ class ValidateCommandForProfileTests(unittest.TestCase):
         with self.assertRaisesRegex(PolicyError, "does not allow `curl` destination"):
             validate_command_for_profile("curl https://evil.example", "registries", CONFIG)
 
+    def test_blocks_uninspected_command_in_hook_only_mode(self) -> None:
+        with self.assertRaisesRegex(PolicyError, "hook_only backend cannot inspect"):
+            validate_command_for_profile("python3 -c pass", "relaxed_network", CONFIG)
+
+    def test_blocks_destination_changing_curl_options(self) -> None:
+        with self.assertRaisesRegex(PolicyError, "option `--connect-to`"):
+            validate_command_for_profile(
+                "curl --connect-to github.com:443:evil.example:443 https://github.com",
+                "relaxed_network",
+                CONFIG,
+            )
+
+    def test_blocks_destination_changing_ssh_options(self) -> None:
+        with self.assertRaisesRegex(PolicyError, "option `-J`"):
+            validate_command_for_profile(
+                "ssh -J jump.example git@github.com",
+                "relaxed_network",
+                CONFIG,
+            )
+
+    def test_blocks_destination_changing_ssh_config_options(self) -> None:
+        with self.assertRaisesRegex(PolicyError, "option `-o proxycommand`"):
+            validate_command_for_profile(
+                "ssh -o 'ProxyCommand ssh jump.example nc %h %p' git@github.com",
+                "relaxed_network",
+                CONFIG,
+            )
+
     def test_blocks_implicit_remote_command_in_hook_only_mode(self) -> None:
         with self.assertRaisesRegex(PolicyError, "hook_only backend can only validate"):
             validate_command_for_profile("git fetch origin", "git_readonly", CONFIG)
@@ -126,6 +154,11 @@ class ValidateCommandForProfileTests(unittest.TestCase):
         linux_config = dict(CONFIG)
         linux_config["backend"] = "linux_wsl_nft"
         validate_command_for_profile("npm ci", "registries", linux_config)
+
+    def test_allows_uninspected_command_on_linux_backend(self) -> None:
+        linux_config = dict(CONFIG)
+        linux_config["backend"] = "linux_wsl_netns"
+        validate_command_for_profile("python3 -c pass", "relaxed_network", linux_config)
 
     def test_allows_local_dev_port(self) -> None:
         validate_command_for_profile("curl http://localhost:8080", "dev_local", CONFIG)

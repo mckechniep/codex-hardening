@@ -2,17 +2,18 @@
 
 ## Purpose
 
-This document defines the first real network-enforcement backend for this repo.
+This document defines the WSL network-enforcement direction for this repo.
 
 The current baseline hardening is useful, but the hook layer is still command-text inspection. It can block obvious `curl` and `ssh` usage, but it cannot reliably stop all network-capable binaries.
 
 The WSL-first backend fixes that by moving real blocking into the Linux networking layer while keeping Codex customization in user-editable policy files.
 
-Current validation note:
+Current backend state:
 
-- the first implementation depends on nft's `socket cgroupv2` expression
-- that requires kernel `CONFIG_NFT_SOCKET`
-- a real validation run on `6.6.87.2-microsoft-standard-WSL2` on April 9, 2026 found that `CONFIG_NFT_SOCKET` was not enabled, which makes this backend unavailable on that stock kernel even though `nft`, `sudo`, cgroup v2, and systemd are present
+- `hook_only` is the default lightweight backend and performs command-string validation only
+- `linux_wsl_netns` is the stock-WSL-compatible stronger backend and uses transient network namespaces plus nftables
+- `linux_wsl_nft` is still available for kernels with nft socket/cgroup support, but it is conditional and not the stock-WSL default
+- a real validation run on `6.6.87.2-microsoft-standard-WSL2` on April 9, 2026 found that `CONFIG_NFT_SOCKET` was not enabled, which makes `linux_wsl_nft` unavailable on that stock kernel even though `nft`, `sudo`, cgroup v2, and systemd are present
 
 ## Scope
 
@@ -98,20 +99,21 @@ This is also what keeps the design adaptable: the same `codex-net exec --profile
 
 ## Backend Contract
 
-The first backend is:
+Current backends are:
 
-- `linux_wsl_nft`
+- `hook_only`: low-friction command validation, no packet isolation
+- `linux_wsl_netns`: transient namespace and nftables enforcement for stock WSL
+- `linux_wsl_nft`: systemd slice plus nft socket/cgroup matching for kernels that support `CONFIG_NFT_SOCKET`
 
-It is responsible for:
+The stronger backend is responsible for:
 
-- preparing or refreshing compiled profile destination sets
+- preparing or refreshing runtime enforcement assets
 - launching a command in the restricted execution context
-- applying `nftables` rules that bind egress to that context
+- applying `nftables` rules that bind egress to that context or namespace
 - surfacing backend capability checks and actionable errors
 
 Future backends:
 
-- `hook_only`
 - `mac_pf_limited`
 
 The policy model should not depend on one specific backend.
@@ -135,11 +137,17 @@ Reason:
 
 ## Enforcement Strategy
 
-Primary design:
+Kernel-dependent `linux_wsl_nft` design:
 
 - commands that need network are launched under a dedicated `codex-net` cgroup hierarchy
 - `nftables` uses socket-to-cgroup matching to identify packets belonging to those commands
 - profile-specific sets define which destination IPs and ports are allowed
+
+Stock-WSL `linux_wsl_netns` design:
+
+- each wrapped command gets a transient network namespace
+- host-side nftables rules key policy to the namespace veth/subnet
+- the command runs as the original user inside that namespace so workspace file ownership is preserved
 
 This backend should treat all traffic from the wrapped process the same way, regardless of which binary created the socket.
 
@@ -153,11 +161,12 @@ Important limitation:
 
 Therefore the control plane has to resolve allowed domains into address sets before command launch.
 
-First-pass compromise:
+Current compromises:
 
-- profile compiler resolves allowed domains to A and AAAA records
-- resolved addresses are written into profile-specific `nftables` sets
-- DNS traffic needed for hostname lookup is allowed in a narrow, explicit way for the wrapped command
+- `linux_wsl_nft` resolves allowed domains to A and AAAA records and writes them into profile-specific `nftables` sets
+- `linux_wsl_netns` writes explicit profile domains into a namespace-local `hosts` file
+- wildcard profiles such as `relaxed_network` use the host resolver config and allow any remote address on the profile's approved ports
+- a local policy DNS stub remains the better long-term design
 
 This blocks arbitrary TCP and UDP egress to most destinations, but it does not fully solve DNS-only leakage in the first pass.
 
@@ -222,15 +231,16 @@ The hook is still heuristic. The backend is where actual egress blocking happens
 
 ## File Layout For The First Pass
 
-Planned additions:
+Current files:
 
 - `docs/wsl-first-architecture.md`
 - `templates/network-profiles.template.toml`
 - `policies/network_profiles.toml`
 - `scripts/codex-net`
 - `scripts/codex_net_backend.py`
-- `scripts/codex_net_compile_profiles.py`
-- `templates/nftables/codex-hardening.nft`
+- `scripts/codex_net_policy.py`
+- `scripts/codex_net_wsl.py`
+- `scripts/codex_net_netns.py`
 - `hooks/block_network_egress.py`
 
 Probable responsibilities:
@@ -239,29 +249,25 @@ Probable responsibilities:
   Stable user-facing wrapper entrypoint
 - `scripts/codex_net_backend.py`
   Backend selection, capability checks, and command launch
-- `scripts/codex_net_compile_profiles.py`
-  Resolve domains and render backend rule inputs
-- `templates/nftables/codex-hardening.nft`
-  Generated or templated `nftables` ruleset
+- `scripts/codex_net_policy.py`
+  Profile loading, command inspection, and user-space policy validation
+- `scripts/codex_net_wsl.py`
+  Kernel-dependent nft/socket backend support
+- `scripts/codex_net_netns.py`
+  Namespace backend support
 
 ## Installer Changes
 
-The installer should eventually grow in two stages.
+The installer now:
 
-Stage 1:
+- copies policy templates, hooks, wrapper, and helper scripts
+- merges hardening settings into `~/.codex/config.toml`
+- repairs known unsafe managed settings while preserving unrelated user settings
+- merges network profile defaults into `~/.codex/policies/network_profiles.toml`
+- performs backend readiness reporting through `codex-net doctor`
+- prints exact backend selection and rollback commands
 
-- copy policy templates
-- install wrapper and helper scripts
-- perform capability checks
-- print exact WSL prerequisites and next steps
-
-Stage 2:
-
-- optional privileged setup for `nftables`
-- optional cgroup or delegated-scope setup
-- optional scheduled refresh for resolved domain sets
-
-The installer should keep the same safety posture as today:
+The installer keeps this safety posture:
 
 - merge local config where possible
 - back up anything it changes
@@ -310,13 +316,14 @@ Phase 3:
 
 Phase 4:
 
+- add namespace-backed execution for stock WSL
 - add temporary grants
 - add better DNS handling
 - add macOS backend scaffold
 
 ## Success Criteria
 
-This first backend is successful if:
+The WSL enforcement path is successful if:
 
 - Codex stays offline by default
 - wrapped commands can access only profile-approved destinations

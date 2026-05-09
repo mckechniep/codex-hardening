@@ -98,7 +98,8 @@ def profile_mode(command: str, config: dict) -> None:
                 deny(
                     f"This command implies network access and maps to profile `{intent.profile}`, but the hook_only backend "
                     "cannot verify its actual destination from the command text. Use a command with an explicit "
-                    "remote target, keep it manual, or switch to linux_wsl_nft when that backend is ready."
+                    "remote target, keep it manual, or switch to linux_wsl_netns on stock WSL "
+                    "(or another stronger backend that is ready on your host)."
                 )
 
             suggested_profile = intent.profile or "<profile>"

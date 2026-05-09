@@ -51,15 +51,29 @@ class BlockNetworkEgressTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stderr, "")
 
+    def test_wrapped_uninspected_command_is_rejected_in_hook_only_mode(self) -> None:
+        result = run_hook(f"{WRAPPER} exec --profile relaxed_network -- python3 -c pass")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("hook_only backend cannot inspect this command", result.stderr)
+
     def test_wrapped_approval_required_profile_is_rejected(self) -> None:
         result = run_hook(f"{WRAPPER} exec --profile registries -- curl https://github.com")
         self.assertEqual(result.returncode, 2)
         self.assertIn("require_approval = true", result.stderr)
 
+    def test_destination_changing_curl_option_is_rejected(self) -> None:
+        result = run_hook(
+            f"{WRAPPER} exec --profile relaxed_network -- "
+            "curl --connect-to github.com:443:evil.example:443 https://github.com"
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("option `--connect-to`", result.stderr)
+
     def test_implicit_remote_command_is_blocked_in_hook_only_mode(self) -> None:
         result = run_hook("git fetch origin")
         self.assertEqual(result.returncode, 2)
         self.assertIn("hook_only backend cannot verify its actual destination", result.stderr)
+        self.assertIn("linux_wsl_netns", result.stderr)
 
     def test_git_pull_is_treated_as_implicit_network_intent(self) -> None:
         result = run_hook("git pull origin main")

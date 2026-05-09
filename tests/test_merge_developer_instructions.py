@@ -12,8 +12,8 @@ from merge_developer_instructions import merge_developer_instructions  # noqa: E
 class MergeDeveloperInstructionsTests(unittest.TestCase):
     def test_adds_missing_developer_instructions_before_tables(self) -> None:
         rendered, action = merge_developer_instructions(
-            'model = "test-model"\n\n[features]\ncodex_hooks = true\n',
-            {"model": "test-model", "features": {"codex_hooks": True}},
+            'model = "test-model"\n\n[features]\nhooks = true\n',
+            {"model": "test-model", "features": {"hooks": True}},
             "Use codex-net.",
         )
 

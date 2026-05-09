@@ -20,6 +20,7 @@ The hardening model here is layered:
 3. Fine-grained shell inspection in `hooks/block_destructive.py`
 4. Fine-grained shell egress checks in `hooks/block_network_egress.py`
 5. Operator-maintained profiles in `policies/network_profiles.toml`
+6. Optional WSL namespace enforcement through `codex-net` when `linux_wsl_netns` is selected
 
 Each layer covers a different failure mode.
 
@@ -93,6 +94,8 @@ This is the first-line network control. If Codex does not have shell-network acc
 
 Subprocesses should not inherit a large ambient environment by default. If secrets are not present in the child process environment, they are harder to leak through accidental or malicious shell actions.
 
+The installer also repairs known unsafe managed settings. It preserves unrelated user configuration and stricter safe choices such as `sandbox_mode = "read-only"` or `web_search = false`, but it fixes settings such as `danger-full-access`, shell sandbox network access, disabled hooks, persistent history, broad environment inheritance, and secret-like names in `shell_environment_policy.include_only`.
+
 ### 7. Native execpolicy rules
 
 `rules/default.rules` provides coarse policy for command prefixes that are rarely justifiable for autonomous execution.
@@ -138,7 +141,7 @@ It allows:
 
 - localhost and loopback targets when the selected profile allows them
 - explicit remote targets that fit the selected profile
-- wrapped commands that use `codex-net exec --profile ... -- ...` when the selected profile does not require approval
+- wrapped commands that use `codex-net exec --profile ... -- ...` when the selected profile does not require approval and the active backend can validate or enforce the command
 
 It blocks:
 
@@ -146,9 +149,11 @@ It blocks:
 - implicit network commands when the backend cannot verify the actual destination
 - ambiguous raw socket use
 - dynamic destinations such as `$URL` that cannot be safely verified from the literal command string
+- destination-changing options such as proxy, resolver, SSH jump, forwarding, or proxy-command options that make command-text destination validation untrustworthy
+- arbitrary profile-wrapped commands under `hook_only` when no inspected destination is visible
 - wrapped commands using profiles marked `require_approval = true`, because Codex `PreToolUse` hooks cannot currently surface a real native approval prompt for this policy decision
 
-On stock WSL today, this hook-driven path is the supported network control model. That means implicit network commands may still require a human decision even when the profile model exists, because the stronger nft-backed backend depends on kernel support that is not present on the default Microsoft WSL kernel validated for this repo.
+On stock WSL, `hook_only` remains the lightweight default and should be understood as command validation rather than packet containment. The stronger `linux_wsl_netns` backend is available as an explicit opt-in path on hosts that pass `codex-net doctor`; it uses transient network namespaces and nftables rules to constrain packets for the wrapped command.
 
 ## What This Repo Does Not Claim
 

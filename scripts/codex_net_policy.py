@@ -60,6 +60,28 @@ CURL_WGET_OPTIONS_WITH_VALUES = {
     "--key",
     "--url",
 }
+DESTINATION_CHANGING_CURL_WGET_OPTIONS = {
+    "-K",
+    "-x",
+    "--config",
+    "--connect-to",
+    "--preproxy",
+    "--proxy",
+    "--resolve",
+    "--socks4",
+    "--socks4a",
+    "--socks5",
+    "--socks5-hostname",
+}
+DESTINATION_CHANGING_SSH_OPTIONS = {"-D", "-F", "-J", "-L", "-R", "-W"}
+DESTINATION_CHANGING_SSH_CONFIG_KEYS = {
+    "dynamicforward",
+    "hostname",
+    "localforward",
+    "proxycommand",
+    "proxyjump",
+    "remoteforward",
+}
 SSH_OPTIONS_WITH_VALUES = {
     "-b",
     "-c",
@@ -541,6 +563,65 @@ def extract_option_port(args: list[str], names: set[str]) -> int | None:
     return None
 
 
+def option_matches(arg: str, option: str) -> bool:
+    if option.startswith("--"):
+        return arg == option or arg.startswith(f"{option}=")
+    return arg == option or (arg.startswith(option) and arg != option)
+
+
+def first_matching_option(args: list[str], options: set[str]) -> str | None:
+    for arg in args:
+        for option in sorted(options, key=len, reverse=True):
+            if option_matches(arg, option):
+                return option
+    return None
+
+
+def ssh_config_option_issue(tool: str, args: list[str]) -> str | None:
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        value = ""
+        if arg == "-o" and index + 1 < len(args):
+            value = args[index + 1]
+            index += 2
+        elif arg.startswith("-o") and arg != "-o":
+            value = arg[2:]
+            index += 1
+        else:
+            index += 1
+            continue
+
+        key = re.split(r"[=\s]", value.strip(), 1)[0].lower()
+        if key in DESTINATION_CHANGING_SSH_CONFIG_KEYS:
+            return (
+                f"`{tool}` option `-o {key}` can change or tunnel network destinations "
+                "and is blocked by profile validation."
+            )
+    return None
+
+
+def blocked_destination_option_issue(tool: str, args: list[str]) -> str | None:
+    if tool in {"curl", "wget"}:
+        option = first_matching_option(args, DESTINATION_CHANGING_CURL_WGET_OPTIONS)
+        if option:
+            return (
+                f"`{tool}` option `{option}` can change proxy, resolver, or connection destinations "
+                "and is blocked by profile validation."
+            )
+
+    if tool in {"ssh", "scp", "rsync"}:
+        option = first_matching_option(args, DESTINATION_CHANGING_SSH_OPTIONS)
+        if option:
+            return (
+                f"`{tool}` option `{option}` can change or tunnel network destinations "
+                "and is blocked by profile validation."
+            )
+        return ssh_config_option_issue(tool, args)
+
+    return None
+
+
 def curl_wget_targets(args: list[str]) -> list[str]:
     return [
         arg
@@ -626,6 +707,10 @@ def _request_from_target(tool: str, target: str, port: int | None, transport: st
 
 
 def requests_for_segment(tool: str, args: list[str]) -> list[NetworkRequest]:
+    blocked_option_issue = blocked_destination_option_issue(tool, args)
+    if blocked_option_issue:
+        return [_request_with_issue(tool, blocked_option_issue)]
+
     if tool in {"curl", "wget"}:
         targets = curl_wget_targets(args)
         if not targets:
@@ -854,6 +939,13 @@ def validate_command_for_profile(
 
     intent = inspect_network_intent(config, command)
     requests = intent.requests if intent else []
+
+    if config["backend"] == "hook_only" and not intent:
+        raise PolicyError(
+            "The hook_only backend cannot inspect this command for network destinations. "
+            "Run ordinary non-network commands directly, use a literal inspected network tool, "
+            "or switch to a stronger backend for arbitrary profile-wrapped commands."
+        )
 
     if config["backend"] == "hook_only" and intent and intent.kind == "implicit":
         raise PolicyError(

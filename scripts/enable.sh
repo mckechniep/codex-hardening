@@ -6,20 +6,19 @@ codex_dir="${HOME}/.codex"
 
 "${repo_dir}/scripts/install.sh"
 
-cat <<EOF
+if [[ -t 0 && -t 1 ]]; then
+  cat <<EOF
 
-Choose your backend:
-- Light mode: blocks direct network shell commands and keeps network access explicit.
-  ${codex_dir}/scripts/codex-net use hook_only
-- Isolated namespace mode: stronger stock-WSL isolation for git/package-manager traffic.
-  ${codex_dir}/scripts/codex-net use netns --prepare --sudo
-- Roll back to whatever backend is configured in ${codex_dir}/policies/network_profiles.toml.
-  ${codex_dir}/scripts/codex-net use default --teardown --sudo
-
-Current chooser:
+Backend setup:
 EOF
+  "${codex_dir}/scripts/codex-net" setup
+else
+  cat <<EOF
 
-"${codex_dir}/scripts/codex-net" backend-info
+Backend setup menu preview:
+EOF
+  "${codex_dir}/scripts/codex-net" setup --print-only
+fi
 
 cat <<EOF
 
@@ -30,5 +29,8 @@ for likely network shell commands.
 When a network command is blocked, retry it with:
   ${codex_dir}/scripts/codex-net autoexec -- <command>
 
-Restart Codex after you pick a backend.
+To approve a site and command without hand-editing policy files:
+  ${codex_dir}/scripts/codex-net approve https://api.example.com --command "mycli sync"
+
+Restart Codex after setup.
 EOF

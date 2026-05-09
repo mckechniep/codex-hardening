@@ -20,6 +20,7 @@ from codex_net_netns import (
     netns_doctor_report,
     reject_expression_for_family,
     render_exec_rules,
+    render_resolv_conf,
     run_netns_exec,
     run_netns_spike,
     select_exec_rules_context,
@@ -59,6 +60,14 @@ def sample_config() -> dict:
                 "allowed_domains": ["localhost", "127.0.0.1"],
                 "allowed_tcp_ports": [3000, 8080],
                 "allowed_udp_ports": [],
+                "require_approval": False,
+            },
+            "relaxed_network": {
+                "description": "Relaxed network access.",
+                "allow_localhost": True,
+                "allowed_domains": ["*"],
+                "allowed_tcp_ports": [80, 443],
+                "allowed_udp_ports": [53],
                 "require_approval": False,
             },
         },
@@ -356,6 +365,32 @@ class NetnsExecRulesTests(unittest.TestCase):
         self.assertIn("reject with icmp type admin-prohibited", rendered)
         self.assertIn('add rule ip nat POSTROUTING ip saddr 10.203.10.0/30 oifname != "cnhabcd1234" jump codex_exec_nat_abcd1234', rendered)
         self.assertIn("add rule ip nat codex_exec_nat_abcd1234 masquerade", rendered)
+
+    def test_render_exec_rules_allows_wildcard_remote_profile_ports(self) -> None:
+        rendered = render_exec_rules(
+            sample_config(),
+            "abcd1234",
+            "cnhabcd1234",
+            {
+                "subnet": "10.203.10.0/30",
+                "host_ip": "10.203.10.1",
+                "guest_ip": "10.203.10.2",
+                "host_cidr": "10.203.10.1/30",
+                "guest_cidr": "10.203.10.2/30",
+            },
+            sample_config()["profiles"]["relaxed_network"],
+            {},
+            {"mode": "standalone_table", "table_name": exec_table_name(sample_config(), "abcd1234")},
+        )
+
+        self.assertIn('iifname "cnhabcd1234" ip daddr != 10.203.10.1 tcp dport { 80, 443 } accept', rendered)
+        self.assertIn('iifname "cnhabcd1234" ip daddr != 10.203.10.1 udp dport { 53 } accept', rendered)
+
+    @mock.patch.object(codex_net_netns, "resolver_addresses", return_value={"ipv4": ["172.20.0.1"], "ipv6": []})
+    def test_render_resolv_conf_uses_host_resolver_for_wildcard_profile(self, mock_resolvers: mock.Mock) -> None:
+        rendered = render_resolv_conf(sample_config()["profiles"]["relaxed_network"])
+
+        self.assertIn("nameserver 172.20.0.1", rendered)
 
 
 class NetnsExecRulesContextTests(unittest.TestCase):

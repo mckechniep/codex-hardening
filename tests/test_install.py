@@ -56,6 +56,7 @@ class InstallScriptTests(unittest.TestCase):
             self.assertTrue((codex_dir / "scripts" / "codex-net").exists())
             self.assertTrue((codex_dir / "scripts" / "codex_net_netns.py").exists())
             self.assertTrue((codex_dir / "scripts" / "merge_config.py").exists())
+            self.assertTrue((codex_dir / "scripts" / "merge_network_profiles.py").exists())
             self.assertTrue((codex_dir / "scripts" / "merge_developer_instructions.py").exists())
             self.assertFalse((codex_dir / "policies" / "network_allowlist.json").exists())
             config_text = (codex_dir / "config.toml").read_text()
@@ -67,11 +68,13 @@ class InstallScriptTests(unittest.TestCase):
             self.assertIn("BEGIN codex-hardening network guidance", config_text)
             self.assertIn("codex-net autoexec -- ...", config_text)
             self.assertIn("[features]", config_text)
-            self.assertIn("codex_hooks = true", config_text)
-            self.assertEqual(
-                (codex_dir / "policies" / "network_profiles.toml").read_text(),
-                "# keep me\nbackend = \"hook_only\"\n",
-            )
+            self.assertIn("hooks = true", config_text)
+            self.assertNotIn("codex_hooks", config_text)
+            policy_text = (codex_dir / "policies" / "network_profiles.toml").read_text()
+            self.assertIn("# keep me\nbackend = \"hook_only\"\n", policy_text)
+            self.assertIn('default_profile = "offline"', policy_text)
+            self.assertIn("[profiles.offline]", policy_text)
+            self.assertIn("[command_profiles]", policy_text)
 
             hooks = json.loads((codex_dir / "hooks.json").read_text())
             self.assertIn("PreToolUse", hooks["hooks"])
@@ -87,6 +90,7 @@ class InstallScriptTests(unittest.TestCase):
             self.assertEqual(len(backups), 1)
             self.assertNotIn("network_allowlist.json", result.stdout)
             self.assertIn("Config merge summary:", result.stdout)
+            self.assertIn("Network policy merge summary:", result.stdout)
 
     def test_enable_script_runs_install_and_prints_backend_choices(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -105,11 +109,11 @@ class InstallScriptTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue((home / ".codex" / "scripts" / "codex-net").exists())
-            self.assertIn("Choose your backend:", result.stdout)
-            self.assertIn(f"{home}/.codex/scripts/codex-net use hook_only", result.stdout)
-            self.assertIn(f"{home}/.codex/scripts/codex-net use netns --prepare --sudo", result.stdout)
-            self.assertIn("Current chooser:", result.stdout)
-            self.assertIn("backend_choices:", result.stdout)
+            self.assertIn("Backend setup menu preview:", result.stdout)
+            self.assertIn("Codex hardening backend setup", result.stdout)
+            self.assertIn("Choose a mode:", result.stdout)
+            self.assertIn("Recommended for this host", result.stdout)
+            self.assertIn("No changes made.", result.stdout)
 
     def test_install_script_preserves_existing_developer_instructions(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -136,6 +140,68 @@ class InstallScriptTests(unittest.TestCase):
             self.assertIn("Keep this custom guidance.", config_text)
             self.assertIn("BEGIN codex-hardening network guidance", config_text)
             self.assertIn("developer_instructions: appended", result.stdout)
+
+    def test_install_script_repairs_unsafe_managed_config(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir)
+            codex_dir = home / ".codex"
+            codex_dir.mkdir(parents=True)
+            (codex_dir / "config.toml").write_text(
+                '\n'.join(
+                    [
+                        'approval_policy = "never"',
+                        'sandbox_mode = "danger-full-access"',
+                        "",
+                        "[sandbox_workspace_write]",
+                        "network_access = true",
+                        "",
+                        "[features]",
+                        "codex_hooks = false",
+                        "",
+                    ]
+                )
+            )
+            env = dict(os.environ)
+            env["HOME"] = str(home)
+
+            result = subprocess.run(
+                ["bash", str(INSTALL_SCRIPT)],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            config_text = (codex_dir / "config.toml").read_text()
+            self.assertIn('approval_policy = "on-request"', config_text)
+            self.assertIn('sandbox_mode = "workspace-write"', config_text)
+            self.assertIn("network_access = false", config_text)
+            self.assertIn("hooks = true", config_text)
+            self.assertNotIn("codex_hooks", config_text)
+            self.assertIn("repaired approval_policy", result.stdout)
+
+    def test_install_script_fails_when_config_merge_fails(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir)
+            codex_dir = home / ".codex"
+            codex_dir.mkdir(parents=True)
+            (codex_dir / "config.toml").write_text('sandbox_mode = "workspace-write"\n[')
+            env = dict(os.environ)
+            env["HOME"] = str(home)
+
+            result = subprocess.run(
+                ["bash", str(INSTALL_SCRIPT)],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("merge_config:", result.stderr)
 
 
 if __name__ == "__main__":

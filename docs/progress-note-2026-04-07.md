@@ -1,5 +1,7 @@
 # Progress Note: 2026-04-07
 
+Status note: this is a historical progress note. The later `linux_wsl_netns` backend now provides a first-pass stock-WSL execution path, so the "alternate backend" recommendation below has been acted on.
+
 ## Current State
 
 The repo now has three network-control layers:

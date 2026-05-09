@@ -14,7 +14,7 @@ from hashlib import sha256
 from pathlib import Path
 
 from codex_net_policy import LOCAL_HOSTS, collect_network_requests
-from codex_net_wsl import BackendError, _kernel_config_value, detect_environment, load_backend_state, state_path
+from codex_net_wsl import BackendError, _kernel_config_value, detect_environment, load_backend_state, resolver_addresses, state_path
 
 
 def _tool_check(name: str, executable: str, required: bool, detail: str) -> dict[str, str]:
@@ -242,7 +242,7 @@ def resolve_profile_ipv4(profile: dict) -> tuple[dict[str, list[str]], list[str]
     unresolved: list[str] = []
     for domain in profile["allowed_domains"]:
         normalized = str(domain).strip().lower()
-        if not normalized or normalized in LOCAL_HOSTS:
+        if not normalized or normalized == "*" or normalized in LOCAL_HOSTS:
             continue
         addresses = _resolve_domain_ipv4(normalized)
         if addresses:
@@ -266,7 +266,19 @@ def render_hosts_file(resolved_domains: dict[str, list[str]], host_gateway_ip: s
     return "\n".join(lines)
 
 
-def render_resolv_conf() -> str:
+def profile_allows_any_remote(profile: dict) -> bool:
+    return "*" in {str(domain).strip().lower() for domain in profile.get("allowed_domains", [])}
+
+
+def render_resolv_conf(profile: dict | None = None) -> str:
+    if profile and profile_allows_any_remote(profile):
+        resolvers = resolver_addresses()
+        nameservers = [*resolvers.get("ipv4", []), *resolvers.get("ipv6", [])]
+        if nameservers:
+            lines = [f"nameserver {address}" for address in nameservers]
+            lines.append("options attempts:1 timeout:2")
+            lines.append("")
+            return "\n".join(lines)
     return "nameserver 127.0.0.1\noptions attempts:1 timeout:1\n"
 
 
@@ -328,6 +340,7 @@ def render_exec_rules(
     tcp_ports = profile["allowed_tcp_ports"]
     udp_ports = profile["allowed_udp_ports"]
     mode = rules_context["mode"]
+    allow_any_remote = profile_allows_any_remote(profile)
     reject_expression = reject_expression_for_family(
         rules_context["filter_family"] if mode == "global_host_chains" else "inet"
     )
@@ -369,10 +382,20 @@ def render_exec_rules(
                 f'add rule {rules_context["filter_family"]} {rules_context["filter_table"]} {rules_context["filter_exec_chain"]} '
                 f'ip daddr {_nft_set(remote_ipv4)} tcp dport {_nft_set(tcp_ports)} accept'
             )
+        if allow_any_remote and tcp_ports:
+            lines.append(
+                f'add rule {rules_context["filter_family"]} {rules_context["filter_table"]} {rules_context["filter_exec_chain"]} '
+                f'ip daddr != {addresses["host_ip"]} tcp dport {_nft_set(tcp_ports)} accept'
+            )
         if remote_ipv4 and udp_ports:
             lines.append(
                 f'add rule {rules_context["filter_family"]} {rules_context["filter_table"]} {rules_context["filter_exec_chain"]} '
                 f'ip daddr {_nft_set(remote_ipv4)} udp dport {_nft_set(udp_ports)} accept'
+            )
+        if allow_any_remote and udp_ports:
+            lines.append(
+                f'add rule {rules_context["filter_family"]} {rules_context["filter_table"]} {rules_context["filter_exec_chain"]} '
+                f'ip daddr != {addresses["host_ip"]} udp dport {_nft_set(udp_ports)} accept'
             )
 
         lines.extend(
@@ -421,9 +444,17 @@ def render_exec_rules(
         lines.append(
             f'        iifname "{host_veth}" ip daddr {_nft_set(remote_ipv4)} tcp dport {_nft_set(tcp_ports)} accept'
         )
+    if allow_any_remote and tcp_ports:
+        lines.append(
+            f'        iifname "{host_veth}" ip daddr != {addresses["host_ip"]} tcp dport {_nft_set(tcp_ports)} accept'
+        )
     if remote_ipv4 and udp_ports:
         lines.append(
             f'        iifname "{host_veth}" ip daddr {_nft_set(remote_ipv4)} udp dport {_nft_set(udp_ports)} accept'
+        )
+    if allow_any_remote and udp_ports:
+        lines.append(
+            f'        iifname "{host_veth}" ip daddr != {addresses["host_ip"]} udp dport {_nft_set(udp_ports)} accept'
         )
 
     lines.extend(
@@ -810,7 +841,7 @@ def run_netns_exec(profile_name: str, wrapped_command: list[str], config: dict, 
     resolv_path = artifact_dir / "resolv.conf"
     nft_path = artifact_dir / "exec.nft"
     hosts_path.write_text(render_hosts_file(resolved_domains, host_gateway_ip=addresses["host_ip"]))
-    resolv_path.write_text(render_resolv_conf())
+    resolv_path.write_text(render_resolv_conf(profile))
     nft_path.write_text(render_exec_rules(config, token, host_veth, addresses, profile, resolved_domains, rules_context))
 
     record = {
