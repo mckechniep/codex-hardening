@@ -485,8 +485,10 @@ Today, the workflow is:
 - in `hook_only`, wrapped commands must expose a literal destination the policy can inspect; arbitrary profile-wrapped binaries require `linux_wsl_netns`, `linux_wsl_nft`, or manual execution
 - profiles marked `require_approval = true` are denied in the hook/wrapper execution path because Codex `PreToolUse` hooks cannot currently produce a native approval prompt; run those commands manually after review, or set `require_approval = false` for profiles you intentionally allow unattended
 - `codex-net setup` provides the guided backend picker used by `scripts/enable.sh`; it recommends hook-only mode on non-WSL or unready hosts and offers WSL namespace isolation when prerequisites are present
+- `codex-net make-default <mode>` saves a backend as the configured default without hand-editing `network_profiles.toml`
+- `codex-net approve <url-or-host> --command "..."` adds a trusted site and command mapping without requiring users to know normal ports
 - `codex-net backend-info` explains the available backends, their readiness, and the current effective selection
-- `codex-net use hook_only`, `codex-net use netns --prepare --sudo`, and `codex-net use default --teardown --sudo` cover the common choose / enable / rollback flow
+- `codex-net use hook_only`, `codex-net use netns --prepare --sudo`, and `codex-net use default --teardown --sudo` remain the lower-level temporary choose / enable / rollback commands used by the guided setup flow
 - `codex-net backend-set <backend>` enables a backend temporarily through an override file instead of permanently editing the user's policy
 - `codex-net backend-set <backend> --persist` writes the backend into `network_profiles.toml` when the user explicitly wants that
 - `codex-net backend-clear` removes the temporary override and returns to the configured backend from `network_profiles.toml`
@@ -500,11 +502,11 @@ Today, the workflow is:
 - `codex-net netns-spike --sudo -- <command>` performs the experimental Phase 5A namespace create/run/cleanup check on stock WSL
 - when `backend = "linux_wsl_netns"`, `codex-net apply-rules --sudo` installs base runtime nftables scaffolding plus local backend state, `codex-net backend-status` reports whether that base runtime still matches disk state and whether any execution records are active, and `codex-net exec --profile ... -- ...` creates a per-execution namespace, installs namespace-local name resolution assets, applies a per-execution nftables table, and then runs the wrapped command as the original user
 
-If `codex-net doctor` reports `nft_socket_expr: ok`, you can try real WSL enforcement by setting `backend = "linux_wsl_nft"` in `network_profiles.toml`, then run:
+If `codex-net doctor` reports `nft_socket_expr: ok`, advanced users can try the kernel-dependent WSL nftables backend without manually editing policy files:
 
 ```bash
 ~/.codex/scripts/codex-net doctor
-~/.codex/scripts/codex-net apply-rules --sudo
+~/.codex/scripts/codex-net make-default nft --prepare --sudo
 ~/.codex/scripts/codex-net backend-status
 ```
 
@@ -541,7 +543,8 @@ Beginner-friendly backend selection flow:
 ```bash
 scripts/enable.sh
 ~/.codex/scripts/codex-net setup
-~/.codex/scripts/codex-net autoexec -- git fetch origin
+~/.codex/scripts/codex-net approve https://api.mycompany.com --command "mycli sync"
+~/.codex/scripts/codex-net autoexec -- mycli sync https://api.mycompany.com
 ```
 
 That sequence:
@@ -550,6 +553,7 @@ That sequence:
 - asks the user how strict they want the network controls to be
 - recommends the portable hook-only backend unless WSL namespace isolation is ready
 - prepares WSL namespace runtime state when the user picks strict mode
+- adds a trusted site and command mapping without hand-editing policy files
 - runs a networked command with automatic profile selection
 
 Important kernel requirement:

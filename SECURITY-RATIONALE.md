@@ -155,6 +155,8 @@ It blocks:
 
 On stock WSL, `hook_only` remains the lightweight default and should be understood as command validation rather than packet containment. The stronger `linux_wsl_netns` backend is available as an explicit opt-in path on hosts that pass `codex-net doctor`; it uses transient network namespaces and nftables rules to constrain packets for the wrapped command.
 
+The operator-facing setup path is intentionally command-driven rather than TOML-first. `codex-net setup` chooses a backend interactively, `codex-net make-default <mode>` persists that choice, and `codex-net approve <url-or-host> --command "..."` adds trusted destinations with normal port inference. The underlying policy file remains reviewable, but routine setup should not require users to know TOML structure or port numbers.
+
 ## What This Repo Does Not Claim
 
 This baseline is useful, but limited.

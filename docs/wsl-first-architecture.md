@@ -265,7 +265,8 @@ The installer now:
 - repairs known unsafe managed settings while preserving unrelated user settings
 - merges network profile defaults into `~/.codex/policies/network_profiles.toml`
 - performs backend readiness reporting through `codex-net doctor`
-- prints exact backend selection and rollback commands
+- launches the guided `codex-net setup` picker for interactive installs, or prints a setup preview for non-interactive installs
+- points users at `codex-net approve ...` for trusted site and command additions instead of hand-editing policy files
 
 The installer keeps this safety posture:
 
